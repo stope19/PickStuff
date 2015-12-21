@@ -1,0 +1,150 @@
+* *************************************************************** *
+* *************************************************************** *
+* READ.CMOS   (PC/R83 only !!)                           (dmm)    *
+*                                                                 *
+* Used to dump the contents of CMOS RAM, displaying real time     *
+* clock setting and current equipment details.                    *
+*                                                                 *
+* The RTC's 64 register locations are not positioned linearly     *
+* on either the AT memory bus or the I/O bus. Instead the RTC     *
+* is allocated one byte on the I/O bus to use as an address       *
+* selector, and another byte to use for input or output. To       *
+* access a byte from the RTC, we must first write out the         *
+* byte location to address '70h'. The RTC byte can then be        *
+* read or written at address '71h'.                               *
+*                                                                 *
+* We use standard R83 PICK user-exits to read from the I/O bus    *
+*                                                                 *
+* Converted from a 'C' program in 'PC TECH SPECIALIST' magazine.  *
+* (Article by Mark Nelson, pg 49 - April 1991)                    *
+* *************************************************************** *
+* *************************************************************** *
+     *
+     EQU TRUE TO 1, FALSE TO 0, AM TO CHAR(254), VM TO CHAR(253)
+     *
+     EQU READ.PORT  TO "UD0BA"   ;* Read byte from I/O port user-exit
+     EQU WRITE.PORT TO "UE0BA"   ;* Write byte to I/O port user-exit
+     EQU ZERO.BYTE  TO "00"      ;* Dummy byte used in user-exits
+     *
+     DIM CMOS(64)                ;* Store CMOS RAM contents in here
+     *
+     *--- Setup tables of possible values
+     *
+     PROMPT ''
+     FLOPPY.DRIVES    = 'Not Installed'
+     FLOPPY.DRIVES<2> = '360K 5.25 inch'
+     FLOPPY.DRIVES<3> = '1.2M 5.25 inch'
+     FLOPPY.DRIVES<4> = '720K 3.5 inch'
+     FLOPPY.DRIVES<5> = '1.44M 3.5 inch'
+     *
+     DISPLAY.TYPES    = 'EGA/VGA'
+     DISPLAY.TYPES<2> = 'CGA in 40 column mode'
+     DISPLAY.TYPES<3> = 'CGA in 80 column mode'
+     DISPLAY.TYPES<4> = 'Monochrome display'
+     *
+     BGS = @(-1):@(-7)
+     BGS = BGS:@(20,2):'*** CMOS RAM Contents ***'
+     BGS = BGS:@(8,4):'00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F'
+     BGS = BGS:@(8,5):'-- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --'
+     BGS = BGS:@(2,6):'0000':@(2,7):'0010':@(2,8):'0020':@(2,9):'0030'
+     BGS = BGS:@(7,12):'Current time    :':@(40):'Current date      :'
+     BGS = BGS:@(7,14):'Standard RAM    :':@(40):'Math Coprocessor  :'
+     BGS = BGS:@(7,15):'Extended RAM    :':@(40):'Primary Display   :'
+     BGS = BGS:@(7,17):'Hard Drive 0    :':@(40):'Floppy Drive 0    :'
+     BGS = BGS:@(7,18):'Hard Drive 1    :':@(40):'Floppy Drive 1    :'
+     BGS = BGS:@(-8)
+     *
+     *--- Read contents of CMOS RAM - 64 bytes
+     *
+     FOR I = 0 TO 63
+        HEX.BYTE  = OCONV(I,'MCDX')"R%2"
+        DUMMY.CHR = OCONV('0070':AM:HEX.BYTE,WRITE.PORT)
+        CMOS(I+1) = OCONV('0071':AM:ZERO.BYTE,READ.PORT)<2>
+     NEXT I
+     *
+     *--- Extract equipment information
+     *
+     FLPY.DRV0 = 'None'
+     FLPY.DRV1 = 'None'
+     HARD.DRIVE.BYTE = CMOS(19)
+     HARD.DRV0 = OCONV(HARD.DRIVE.BYTE[1,1],'MCXD')
+     IF HARD.DRV0 THEN
+        IF HARD.DRV0 = 15 THEN HARD.DRV0  = OCONV(CMOS(26),'MCXD')
+        HARD.DRV0 = 'Type ':HARD.DRV0
+     END ELSE HARD.DRV0 = 'None'
+     HARD.DRV1  = OCONV(HARD.DRIVE.BYTE[2,1],'MCXD')
+     IF HARD.DRV1 THEN
+        IF HARD.DRV1 = 15 THEN HARD.DRV1  = OCONV(CMOS(27),'MCXD')
+        HARD.DRV1 = 'Type ':HARD.DRV1
+     END ELSE HARD.DRV1 = 'None'
+     BINARY.BYTE = ''
+     EQUIP.BYTE  = OCONV(CMOS(21),'MCXD')
+     LOOP UNTIL EQUIP.BYTE = 0 DO
+        BIT = MOD(EQUIP.BYTE,2)
+        EQUIP.BYTE  = INT(EQUIP.BYTE / 2)
+        BINARY.BYTE = BIT:BINARY.BYTE
+     REPEAT
+     BINARY.BYTE = BINARY.BYTE "R%8"
+     FLOPPY.DRVS = (BINARY.BYTE[8,1] = 1)
+     IF FLOPPY.DRVS THEN
+        FLOPPY.DRIVE.BYTE = CMOS(17)
+        FLPY.DRV0 = FLOPPY.DRIVE.BYTE[1,1] + 1
+        FLPY.DRV0 = FLOPPY.DRIVES<FLPY.DRV0>
+        IF FLPY.DRV0 > '' ELSE FLPY.DRV0 = 'Bad Drive Type'
+        IF FLOPPY.DRIVE.BYTE[2,1] THEN
+           FLPY.DRV1 = FLOPPY.DRIVE.BYTE[2,1] + 1
+           FLPY.DRV1 = FLOPPY.DRIVES<FLPY.DRV1>
+           IF FLPY.DRV1 > '' ELSE FLPY.DRV1 = 'Bad Drive Type'
+        END
+     END
+     MATH.CHIP = (BINARY.BYTE[7,1] = 1)
+     IF MATH.CHIP THEN MATH.CHIP = 'Yes' ELSE MATH.CHIP = 'No'
+     DISP.CARD = BINARY.BYTE[3,2]      ;* 00, 01, 10 OR 11
+     IF DISP.CARD > 1 THEN DISP.CARD = DISP.CARD - 8
+     DISP.CARD = DISPLAY.TYPES<DISP.CARD + 1>
+     IF DISP.CARD > '' ELSE DISP.CARD = 'Unknown Display Type'
+     STD.RAM = OCONV(CMOS(23):CMOS(22),'MCXD'):'K'
+     EXT.RAM = OCONV(CMOS(25):CMOS(24),'MCXD'):'K'
+     *
+     *--- Load buffer with CMOS RAM as hex and ascii characters
+     *
+     BUFFER = BGS
+     FOR I = 1 TO 4
+        HBUFF = ''              ;* Hex display buffer
+        ABUFF = ''              ;* Ascii display buffer
+        SPOS  = (I-1) * 16      ;* Start position in array
+        EPOS  = SPOS + 15       ;* End position in array
+        FOR J = SPOS TO EPOS    ;* Loop through CMOS contents
+           HEX.BYTE = CMOS(J+1)
+           DEC.BYTE = OCONV(HEX.BYTE,'MCXD')
+           IF DEC.BYTE < 32 THEN CHARACTER = '.' ELSE
+              IF DEC.BYTE > 250 THEN DEC.BYTE = DEC.BYTE - 160
+              CHARACTER = CHAR(DEC.BYTE)  ;* Character equiv. of hex byte
+           END
+           HBUFF = HBUFF:' ':HEX.BYTE
+           ABUFF = ABUFF:CHARACTER
+        NEXT J
+        BUFFER = BUFFER:@(7,I+5):HBUFF:' ':ABUFF
+     NEXT I
+     *
+     *--- Load buffer with current time and date
+     *
+     BUFFER = BUFFER:@(24,12):CMOS(5):':':CMOS(3):':':CMOS(1)
+     BUFFER = BUFFER:@(59):CMOS(8):'/':CMOS(9):'/':CMOS(51):CMOS(10)
+     *
+     *--- Load buffer with equipment information
+     *
+     BUFFER = BUFFER:@(24,14):STD.RAM:@(59):MATH.CHIP
+     BUFFER = BUFFER:@(24,15):EXT.RAM:@(59):DISP.CARD
+     BUFFER = BUFFER:@(24,17):HARD.DRV0:@(59):FLPY.DRV0
+     BUFFER = BUFFER:@(24,18):HARD.DRV1:@(59):FLPY.DRV1
+     *
+     *--- Display buffer
+     *
+     PRINT BUFFER
+     PRINT ; PRINT
+     PRINT 'RETURN to continue:':
+     INPUT REPLY,1
+     STOP
+*
+     END
