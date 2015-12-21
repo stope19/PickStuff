@@ -1,0 +1,510 @@
+SUBROUTINE SHA1(MODE, SVAL)
+*r83 SUBROUTINE SHA1(MODE, SVAL, MAT SHA1.STATE)
+* ************************************************************ *
+* ************************************************************ *
+* SHA1 - An implementation of the SHA-1 Algorithm              *
+*                                                              *
+* This code works best on platforms that support named common, *
+* but includes logic to allow it to run on platforms without   *
+* this feature or 'bitwise' operators. Note that in this case  *
+* it will perform VERY poorly.                                 *
+*                                                              *
+* Passed: MODE 0 = perform steps 1 to 3 on 'SVAL', return hash.*
+*              1 = initialise message digest structure         *
+*              2 = add string passed in 'SVAL' to digest       *
+*              3 = finalise digest and return in 'SVAL'        *
+*                                                              *
+*         SVAL   = string to add to digest if 'MODE' = 0 or 2  *
+*                                                              *
+* Return: SVAL   = SHA1 value (in hex) when 'MODE' = 0 or 3    *
+*                                                              *
+* This version converted from SHA1.java by Chuck McManis       *
+* (cmcmanis@netcom.com) - public domain.                       *
+*                                                              *
+* Based on the C code by Steve Reid. From his header:          *
+*   SHA-1 in C                                                 *
+*   By Steve Reid <steve@edmweb.com>                           *
+*   100% Public Domain                                         *
+*   Test Vectors (from FIPS PUB 180-1)                         *
+*   "abc"                                                      *
+*   A9993E36 4706816A BA3E2571 7850C26C 9CD0D89D               *
+*   "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq" *
+*   84983E44 1C3BD26E BAAE4AA1 F95129E5 E54670F1               *
+*   A million repetitions of "a"                               *
+*   34AA973C D4C4DAA4 F61EEB2B DBAD2731 6534016F               *
+*                                                              *
+* Note: The 'SHA1.STATE' array is used to preserve digest      *
+*       'state' over multiple calls to this function. It must  *
+*       not be changed by the calling program! For non R83     *
+*       style platforms, this is best defined in a 'named'     *
+*       common block.                                    (dmm) *
+* ************************************************************ *
+* ************************************************************ *
+     *
+     EQU MAX32   TO  4294967295  ;* 0xFFFFFFFF
+     EQU M32P1   TO  4294967296  ;* MAX32 + 1
+     EQU MAXINT  TO  2147483647  ;* 0X7FFFFFFF
+     EQU M16P1   TO  65536       ;* 0XFFFF + 1
+     EQU CV1     TO  2147483648  ;* 0x80000000
+     EQU CV2     TO  1073741824  ;* 0x40000000
+     *
+     COMMON /C$SHA1/ SHA1.STATE(23) ;* udt/uv
+*r83 DIM SHA1.STATE(23)
+     *
+     EQU STATE.BEG  TO 1
+     EQU STATE.END  TO 5
+     EQU BLOCK.BEG  TO 6
+     EQU BLOCK.END  TO 21
+     EQU COUNTER    TO SHA1.STATE(22)
+     EQU BLOCKINDEX TO SHA1.STATE(23)
+     *
+     DIM DTA(8)  ;* Local 'scratch' space.
+     *
+     ON MODE + 1 GOSUB 1000, 2000, 3000, 4000
+     RETURN
+     *
+* ********************************************************* *
+* This entry point provides a 'convenience method' to allow *
+* a passed string to be hashed. This call will perform the  *
+* initialisation, update and completion calls for us.       *
+* ********************************************************* *
+1000*
+     GOSUB 2000   ;* Initialise
+     GOSUB 3000   ;* Update
+     GOSUB 4000   ;* Build digest
+     RETURN
+     *
+* ************************************** *
+* Initialise variables to being new hash *
+* ************************************** *
+2000*
+     MAT SHA1.STATE = 0
+     *
+     SHA1.STATE(STATE.BEG)   = 1732584193  ;* 0x67452301
+     SHA1.STATE(STATE.BEG+1) = 4023233417  ;* 0xEFCDAB89
+     SHA1.STATE(STATE.BEG+2) = 2562383102  ;* 0x98BADCFE
+     SHA1.STATE(STATE.BEG+3) = 271733878   ;* 0x10325476
+     SHA1.STATE(STATE.BEG+4) = 3285377520  ;* 0xC3D2E1F0
+     RETURN
+     *
+* ********************************** *
+* Add a string to the digest. String *
+* to add passed in variable 'SVAL'   *
+* ********************************** *
+3000*
+     LGTH = LEN(SVAL)
+     FOR PTR = 1 TO LGTH
+        BYTE = SEQ(SVAL[PTR, 1])
+        GOSUB 3500
+     NEXT PTR
+     RETURN
+     *
+     * Update digest for a single byte
+     *
+3500*
+     COUNTER = COUNTER + 8
+     MASK = PWR(2, 8 * MOD(BLOCKINDEX, 4))
+     POS  = BLOCK.BEG + INT(BLOCKINDEX / 4)
+     VAL  = SHA1.STATE(POS)
+     VAL1 = MAX32 - (255 * MASK)  ; GOSUB 8100
+     VAL1 = MOD(BYTE, 256) * MASK ; GOSUB 8200
+     SHA1.STATE(POS) = VAL
+     BLOCKINDEX = BLOCKINDEX + 1
+     IF BLOCKINDEX = 64 THEN
+        * Transform!
+        GOSUB 5000
+        BLOCKINDEX = 0
+     END
+     RETURN
+     *
+* ********************************************* *
+* Complete processing on the message digest. If *
+* another digest is to be computed, the values  *
+* in common must be reset (call to subr 2000)   *
+* should be called before any new calls to this *
+* entry point are made.                         *
+* ********************************************* *
+4000*
+     BITCOUNT = COUNTER ;* Save bit count!
+     * Add terminator and padding chars!
+     BYTE = 128
+     GOSUB 3500
+     IF BLOCKINDEX < 56 THEN
+        LGTH = 56 - BLOCKINDEX
+     END ELSE
+        IF BLOCKINDEX > 56 THEN
+           LGTH = 64 - BLOCKINDEX + 56
+        END ELSE LGTH = 0
+     END
+     BYTE = 0
+     FOR PTR = 1 TO LGTH
+        GOSUB 3500
+     NEXT PTR
+     * Update with bitcount!
+     MAT DTA = 0
+     FOR PTR = 1 TO 8 WHILE BITCOUNT > 0
+        DTA(PTR) = MOD(BITCOUNT, 256)
+        BITCOUNT = INT(BITCOUNT / 256)
+     NEXT PTR
+     FOR PTR = 8 TO 1 STEP -1
+        BYTE = DTA(PTR)
+        GOSUB 3500
+     NEXT PTR
+     * Now build up digest return value!
+     SVAL = ''
+     FOR PTR = 0 TO 19
+        VAL = SHA1.STATE(STATE.BEG + INT(PTR / 4))
+        VAL1 = (3 - MOD(PTR, 4)) * 8
+        IF VAL1 > 0 THEN VAL = INT(VAL / PWR(2, VAL1))
+        SVAL = SVAL:OCONV(MOD(VAL, 256), 'MCDX') "R%2"
+     NEXT PTR
+     RETURN
+     *
+* *************************************************************** *
+* Hash a single 512-bit block. This is the core of the algorithm. *
+* *************************************************************** *
+5000*
+     * Copy current state into work array
+     DTA(1) = SHA1.STATE(STATE.BEG)
+     DTA(2) = SHA1.STATE(STATE.BEG+1)
+     DTA(3) = SHA1.STATE(STATE.BEG+2)
+     DTA(4) = SHA1.STATE(STATE.BEG+3)
+     DTA(5) = SHA1.STATE(STATE.BEG+4)
+     * Do the transformations!
+     *
+     * R0()
+     V = 1; W = 2; X = 3; Y = 4; Z = 5; I = 0;  GOSUB 7500
+     V = 5; W = 1; X = 2; Y = 3; Z = 4; I = 1;  GOSUB 7500
+     V = 4; W = 5; X = 1; Y = 2; Z = 3; I = 2;  GOSUB 7500
+     V = 3; W = 4; X = 5; Y = 1; Z = 2; I = 3;  GOSUB 7500
+     V = 2; W = 3; X = 4; Y = 5; Z = 1; I = 4;  GOSUB 7500
+     V = 1; W = 2; X = 3; Y = 4; Z = 5; I = 5;  GOSUB 7500
+     V = 5; W = 1; X = 2; Y = 3; Z = 4; I = 6;  GOSUB 7500
+     V = 4; W = 5; X = 1; Y = 2; Z = 3; I = 7;  GOSUB 7500
+     V = 3; W = 4; X = 5; Y = 1; Z = 2; I = 8;  GOSUB 7500
+     V = 2; W = 3; X = 4; Y = 5; Z = 1; I = 9;  GOSUB 7500
+     V = 1; W = 2; X = 3; Y = 4; Z = 5; I = 10; GOSUB 7500
+     V = 5; W = 1; X = 2; Y = 3; Z = 4; I = 11; GOSUB 7500
+     V = 4; W = 5; X = 1; Y = 2; Z = 3; I = 12; GOSUB 7500
+     V = 3; W = 4; X = 5; Y = 1; Z = 2; I = 13; GOSUB 7500
+     V = 2; W = 3; X = 4; Y = 5; Z = 1; I = 14; GOSUB 7500
+     V = 1; W = 2; X = 3; Y = 4; Z = 5; I = 15; GOSUB 7500
+     *
+     * R1()
+     V = 5; W = 1; X = 2; Y = 3; Z = 4; I = 16; GOSUB 7600
+     V = 4; W = 5; X = 1; Y = 2; Z = 3; I = 17; GOSUB 7600
+     V = 3; W = 4; X = 5; Y = 1; Z = 2; I = 18; GOSUB 7600
+     V = 2; W = 3; X = 4; Y = 5; Z = 1; I = 19; GOSUB 7600
+     *
+     * R2()
+     V = 1; W = 2; X = 3; Y = 4; Z = 5; I = 20; GOSUB 7700
+     V = 5; W = 1; X = 2; Y = 3; Z = 4; I = 21; GOSUB 7700
+     V = 4; W = 5; X = 1; Y = 2; Z = 3; I = 22; GOSUB 7700
+     V = 3; W = 4; X = 5; Y = 1; Z = 2; I = 23; GOSUB 7700
+     V = 2; W = 3; X = 4; Y = 5; Z = 1; I = 24; GOSUB 7700
+     V = 1; W = 2; X = 3; Y = 4; Z = 5; I = 25; GOSUB 7700
+     V = 5; W = 1; X = 2; Y = 3; Z = 4; I = 26; GOSUB 7700
+     V = 4; W = 5; X = 1; Y = 2; Z = 3; I = 27; GOSUB 7700
+     V = 3; W = 4; X = 5; Y = 1; Z = 2; I = 28; GOSUB 7700
+     V = 2; W = 3; X = 4; Y = 5; Z = 1; I = 29; GOSUB 7700
+     V = 1; W = 2; X = 3; Y = 4; Z = 5; I = 30; GOSUB 7700
+     V = 5; W = 1; X = 2; Y = 3; Z = 4; I = 31; GOSUB 7700
+     V = 4; W = 5; X = 1; Y = 2; Z = 3; I = 32; GOSUB 7700
+     V = 3; W = 4; X = 5; Y = 1; Z = 2; I = 33; GOSUB 7700
+     V = 2; W = 3; X = 4; Y = 5; Z = 1; I = 34; GOSUB 7700
+     V = 1; W = 2; X = 3; Y = 4; Z = 5; I = 35; GOSUB 7700
+     V = 5; W = 1; X = 2; Y = 3; Z = 4; I = 36; GOSUB 7700
+     V = 4; W = 5; X = 1; Y = 2; Z = 3; I = 37; GOSUB 7700
+     V = 3; W = 4; X = 5; Y = 1; Z = 2; I = 38; GOSUB 7700
+     V = 2; W = 3; X = 4; Y = 5; Z = 1; I = 39; GOSUB 7700
+     *
+     * R3()
+     V = 1; W = 2; X = 3; Y = 4; Z = 5; I = 40; GOSUB 7800
+     V = 5; W = 1; X = 2; Y = 3; Z = 4; I = 41; GOSUB 7800
+     V = 4; W = 5; X = 1; Y = 2; Z = 3; I = 42; GOSUB 7800
+     V = 3; W = 4; X = 5; Y = 1; Z = 2; I = 43; GOSUB 7800
+     V = 2; W = 3; X = 4; Y = 5; Z = 1; I = 44; GOSUB 7800
+     V = 1; W = 2; X = 3; Y = 4; Z = 5; I = 45; GOSUB 7800
+     V = 5; W = 1; X = 2; Y = 3; Z = 4; I = 46; GOSUB 7800
+     V = 4; W = 5; X = 1; Y = 2; Z = 3; I = 47; GOSUB 7800
+     V = 3; W = 4; X = 5; Y = 1; Z = 2; I = 48; GOSUB 7800
+     V = 2; W = 3; X = 4; Y = 5; Z = 1; I = 49; GOSUB 7800
+     V = 1; W = 2; X = 3; Y = 4; Z = 5; I = 50; GOSUB 7800
+     V = 5; W = 1; X = 2; Y = 3; Z = 4; I = 51; GOSUB 7800
+     V = 4; W = 5; X = 1; Y = 2; Z = 3; I = 52; GOSUB 7800
+     V = 3; W = 4; X = 5; Y = 1; Z = 2; I = 53; GOSUB 7800
+     V = 2; W = 3; X = 4; Y = 5; Z = 1; I = 54; GOSUB 7800
+     V = 1; W = 2; X = 3; Y = 4; Z = 5; I = 55; GOSUB 7800
+     V = 5; W = 1; X = 2; Y = 3; Z = 4; I = 56; GOSUB 7800
+     V = 4; W = 5; X = 1; Y = 2; Z = 3; I = 57; GOSUB 7800
+     V = 3; W = 4; X = 5; Y = 1; Z = 2; I = 58; GOSUB 7800
+     V = 2; W = 3; X = 4; Y = 5; Z = 1; I = 59; GOSUB 7800
+     *
+     * R4()
+     V = 1; W = 2; X = 3; Y = 4; Z = 5; I = 60; GOSUB 7900
+     V = 5; W = 1; X = 2; Y = 3; Z = 4; I = 61; GOSUB 7900
+     V = 4; W = 5; X = 1; Y = 2; Z = 3; I = 62; GOSUB 7900
+     V = 3; W = 4; X = 5; Y = 1; Z = 2; I = 63; GOSUB 7900
+     V = 2; W = 3; X = 4; Y = 5; Z = 1; I = 64; GOSUB 7900
+     V = 1; W = 2; X = 3; Y = 4; Z = 5; I = 65; GOSUB 7900
+     V = 5; W = 1; X = 2; Y = 3; Z = 4; I = 66; GOSUB 7900
+     V = 4; W = 5; X = 1; Y = 2; Z = 3; I = 67; GOSUB 7900
+     V = 3; W = 4; X = 5; Y = 1; Z = 2; I = 68; GOSUB 7900
+     V = 2; W = 3; X = 4; Y = 5; Z = 1; I = 69; GOSUB 7900
+     V = 1; W = 2; X = 3; Y = 4; Z = 5; I = 70; GOSUB 7900
+     V = 5; W = 1; X = 2; Y = 3; Z = 4; I = 71; GOSUB 7900
+     V = 4; W = 5; X = 1; Y = 2; Z = 3; I = 72; GOSUB 7900
+     V = 3; W = 4; X = 5; Y = 1; Z = 2; I = 73; GOSUB 7900
+     V = 2; W = 3; X = 4; Y = 5; Z = 1; I = 74; GOSUB 7900
+     V = 1; W = 2; X = 3; Y = 4; Z = 5; I = 75; GOSUB 7900
+     V = 5; W = 1; X = 2; Y = 3; Z = 4; I = 76; GOSUB 7900
+     V = 4; W = 5; X = 1; Y = 2; Z = 3; I = 77; GOSUB 7900
+     V = 3; W = 4; X = 5; Y = 1; Z = 2; I = 78; GOSUB 7900
+     V = 2; W = 3; X = 4; Y = 5; Z = 1; I = 79; GOSUB 7900
+     *
+     * Add working vars back into state!
+     FOR IDX = 1 TO 5
+        POS = STATE.BEG + IDX - 1
+        VAL = SHA1.STATE(POS) + DTA(IDX)
+        IF VAL > MAX32 THEN VAL = MOD(VAL, M32P1)
+        SHA1.STATE(POS) = VAL
+     NEXT IDX
+     RETURN
+*
+* Steve's original code and comments :
+*
+* blk0() and blk() perform the initial expand.
+* I got the idea of expanding during the round function from SSLeay
+*
+* #define blk0(i) block->l[i]
+* #define blk(i) (block->l[i&15] = rol(block->l[(i+13)&15]^block->l[(i+8)&15] \
+*   ^block->l[(i+2)&15]^block->l[i&15],1))
+*
+* (R0+R1), R2, R3, R4 are the different operations used in SHA1
+* #define R0(v,w,x,y,z,i) z+=((w&(x^y))^y)+blk0(i)+0x5A827999+rol(v,5);w=rol(w,30);
+* #define R1(v,w,x,y,z,i) z+=((w&(x^y))^y)+blk(i)+0x5A827999+rol(v,5);w=rol(w,30);
+* #define R2(v,w,x,y,z,i) z+=(w^x^y)+blk(i)+0x6ED9EBA1+rol(v,5);w=rol(w,30);
+* #define R3(v,w,x,y,z,i) z+=(((w|x)&y)|(w&x))+blk(i)+0x8F1BBCDC+rol(v,5);w=rol(w,30);
+* #define R4(v,w,x,y,z,i) z+=(w^x^y)+blk(i)+0xCA62C1D6+rol(v,5);w=rol(w,30);
+*
+* ********************************************** *
+* Transform function blk0(i)                     *
+* Passed index value 'I' perform initial expand. *
+* Return result in 'VAL' (and update BLOCK)      *
+* ********************************************** *
+7300*
+     POS = BLOCK.BEG + I
+     VAL = SHA1.STATE(POS) ; VAL1 = 8 ; GOSUB 8400
+     VAL1 = 16711935     ;* 0x00FF00FF
+     GOSUB 8100 ; T0 = VAL
+     VAL = SHA1.STATE(POS) ; VAL1 = 24 ; GOSUB 8400
+     VAL1 = 4278255360   ;* 0xFF00FF00
+     GOSUB 8100 ; VAL1 = T0 ; GOSUB 8200
+     SHA1.STATE(POS) = VAL
+     RETURN
+     *
+* ********************************************** *
+* Transform function blk(i)                      *
+* Passed index value 'I' perform initial expand. *
+* Return result in 'VAL' (and update BLOCK)      *
+* ********************************************** *
+7400*
+     POS  = BLOCK.BEG + MOD(I, 16)
+     VAL  = SHA1.STATE(BLOCK.BEG + MOD(I+13, 16))
+     VAL1 = SHA1.STATE(BLOCK.BEG + MOD(I+8, 16)) ; GOSUB 8300
+     VAL1 = SHA1.STATE(BLOCK.BEG + MOD(I+2, 16)) ; GOSUB 8300
+     VAL1 = SHA1.STATE(POS) ; GOSUB 8300
+     VAL1 = 1               ; GOSUB 8400
+     SHA1.STATE(POS) = VAL
+     RETURN
+     *
+* ****************************************** *
+* Transform function R0 - update DTA() given *
+* DTA(), V, W, X, Y, Z, I                    *
+* ****************************************** *
+7500*
+     VAL = DTA(V) ; VAL1 = 5 ; GOSUB 8400
+     T1 = VAL + 1518500249 ;* 0x5A827999
+     GOSUB 7300 ; T1 = T1 + VAL
+     VAL  = DTA(X) ; VAL1 = DTA(Y) ; GOSUB 8300
+     VAL1 = DTA(W) ; GOSUB 8100
+     VAL1 = DTA(Y) ; GOSUB 8300
+     VAL = DTA(Z) + VAL + T1
+     IF VAL > MAX32 THEN VAL = MOD(VAL, M32P1)
+     DTA(Z) = VAL
+     VAL = DTA(W) ; VAL1 = 30 ; GOSUB 8400
+     DTA(W) = VAL
+     RETURN
+     *
+* ****************************************** *
+* Transform function R1 - update DTA() given *
+* DTA(), V, W, X, Y, Z, I                    *
+* ****************************************** *
+7600*
+     VAL = DTA(V) ; VAL1 = 5 ; GOSUB 8400
+     T1 = VAL + 1518500249 ;* 0x5A827999
+     GOSUB 7400 ; T1 = T1 + VAL
+     VAL  = DTA(X) ; VAL1 = DTA(Y) ; GOSUB 8300
+     VAL1 = DTA(W) ; GOSUB 8100
+     VAL1 = DTA(Y) ; GOSUB 8300
+     VAL = DTA(Z) + VAL + T1
+     IF VAL > MAX32 THEN VAL = MOD(VAL, M32P1)
+     DTA(Z) = VAL
+     VAL = DTA(W) ; VAL1 = 30 ; GOSUB 8400
+     DTA(W) = VAL
+     RETURN
+     *
+* ****************************************** *
+* Transform function R2 - update DTA() given *
+* DTA(), V, W, X, Y, Z, I                    *
+* ****************************************** *
+7700*
+     VAL = DTA(V) ; VAL1 = 5 ; GOSUB 8400
+     T1 = VAL + 1859775393 ;* 0x6ED9EBA1
+     GOSUB 7400 ; T1 = T1 + VAL
+     VAL = DTA(W) ; VAL1 = DTA(X) ; GOSUB 8300
+     VAL1 = DTA(Y) ; GOSUB 8300
+     VAL = DTA(Z) + VAL + T1
+     IF VAL > MAX32 THEN VAL = MOD(VAL, M32P1)
+     DTA(Z) = VAL
+     VAL = DTA(W) ; VAL1 = 30 ; GOSUB 8400
+     DTA(W) = VAL
+     RETURN
+     *
+* ****************************************** *
+* Transform function R3 - update DTA() given *
+* DTA(), V, W, X, Y, Z, I                    *
+* ****************************************** *
+7800*
+     VAL = DTA(V) ; VAL1 = 5 ; GOSUB 8400
+     T1 = VAL + 2400959708 ;* 0x8F1BBCDC
+     GOSUB 7400 ; T2 = T1 + VAL
+     VAL = DTA(W) ; VAL1 = DTA(X) ; GOSUB 8200
+     VAL1 = DTA(Y) ; GOSUB 8100 ; T1 = VAL
+     VAL = DTA(W) ; VAL1 = DTA(X) ; GOSUB 8100
+     VAL1 = T1 ; GOSUB 8200
+     VAL = DTA(Z) + T2 + VAL
+     IF VAL > MAX32 THEN VAL = MOD(VAL, M32P1)
+     DTA(Z) = VAL
+     VAL = DTA(W) ; VAL1 = 30 ; GOSUB 8400
+     DTA(W) = VAL
+     RETURN
+     *
+* ****************************************** *
+* Transform function R4 - update DTA() given *
+* DTA(), V, W, X, Y, Z, I                    *
+* ****************************************** *
+7900*
+     VAL = DTA(V) ; VAL1 = 5 ; GOSUB 8400
+     T1 = VAL + 3395469782 ;* 0xCA62C1D6
+     GOSUB 7400 ; T1 = T1 + VAL
+     VAL = DTA(W) ; VAL1 = DTA(X) ; GOSUB 8300
+     VAL1 = DTA(Y) ; GOSUB 8300
+     VAL = DTA(Z) + VAL + T1
+     IF VAL > MAX32 THEN VAL = MOD(VAL, M32P1)
+     DTA(Z) = VAL
+     VAL = DTA(W) ; VAL1 = 30 ; GOSUB 8400
+     DTA(W) = VAL
+     RETURN
+     *
+* ********************************************* *
+* Shift left - Passed 'VAL' as value to work on *
+* and 'VAL1' as number of times to 'shift left'.*
+* We pretend 'VAL' is an unsigned 32 bit value. *
+* Note: We cannot always use the more simple    *
+*  VAL = VAL * PWR(2, VAL1)                     *
+*  IF VAL > MAX32 THEN VAL = MOD(VAL, M32P1)    *
+* because on some platforms (eg: R83) the first *
+* multiplication may cause numeric 'overflow'.  *
+* ********************************************* *
+8000*
+     VAL = VAL * PWR(2, VAL1)                  ;* udt/uv
+     IF VAL > MAX32 THEN VAL = MOD(VAL, M32P1) ;* udt/uv
+*r83 FOR P0 = 1 TO VAL1
+*r83    VAL = MOD(VAL, CV1)
+*r83    IF MOD(INT(VAL / CV2), 2) THEN
+*r83       VAL = (VAL - CV2) * 2 + CV1
+*r83    END ELSE VAL = VAL + VAL
+*r83 NEXT P0
+     RETURN
+     *
+* ********************************************* *
+* Logical 'AND' of two values. Both are assumed *
+* to be unsigned 32 bit integers. Passed 'VAL'  *
+* and 'VAL1', with result returned in 'VAL'     *
+* ********************************************* *
+8100*
+     IF VAL > MAXINT OR VAL1 > MAXINT THEN                 ;* udt/uv
+        VAL3 = BITAND(MOD(VAL, M16P1), MOD(VAL1, M16P1))   ;* udt/uv
+        VAL4 = BITAND(INT(VAL / M16P1), INT(VAL1 / M16P1)) ;* udt/uv
+        VAL = (VAL4 * M16P1) + VAL3                        ;* udt/uv
+     END ELSE                                              ;* udt/uv
+        VAL = BITAND(VAL, VAL1)                            ;* udt/uv
+     END                                                   ;* udt/uv
+*r83 VAL3 = 0 ; P1 = 1
+*r83 FOR P0 = 0 TO 31
+*r83    IF MOD(INT(VAL / P1), 2) AND MOD(INT(VAL1 / P1), 2) THEN
+*r83       VAL3 = VAL3 + P1
+*r83    END
+*r83    P1 = P1 + P1
+*r83 NEXT P0
+*r83 VAL = VAL3
+     RETURN
+     *
+* ********************************************* *
+* Logical 'OR' of two values. Both are assumed  *
+* to be unsigned 32 bit integers. Passed 'VAL'  *
+* and 'VAL1', with result returned in 'VAL'     *
+* ********************************************* *
+8200*
+     IF VAL > MAXINT OR VAL1 > MAXINT THEN                ;* udt/uv
+        VAL3 = BITOR(MOD(VAL, M16P1), MOD(VAL1, M16P1))   ;* udt/uv
+        VAL4 = BITOR(INT(VAL / M16P1), INT(VAL1 / M16P1)) ;* udt/uv
+        VAL = (VAL4 * M16P1) + VAL3                       ;* udt/uv
+     END ELSE                                             ;* udt/uv
+        VAL = BITOR(VAL, VAL1)                            ;* udt/uv
+     END                                                  ;* udt/uv
+*r83 VAL3 = 0 ; P1 = 1
+*r83 FOR P0 = 0 TO 31
+*r83    IF MOD(INT(VAL / P1), 2) OR MOD(INT(VAL1 / P1), 2) THEN
+*r83       VAL3 = VAL3 + P1
+*r83    END
+*r83    P1 = P1 + P1
+*r83 NEXT P0
+*r83 VAL = VAL3
+     RETURN
+     *
+* ********************************************* *
+* Logical 'XOR' of two values. Both are assumed *
+* to be unsigned 32 bit integers. Passed 'VAL'  *
+* and 'VAL1', with result returned in 'VAL'     *
+* ********************************************* *
+8300*
+     IF VAL > MAXINT OR VAL1 > MAXINT THEN                 ;* udt/uv
+        VAL3 = BITXOR(MOD(VAL, M16P1), MOD(VAL1, M16P1))   ;* udt/uv
+        VAL4 = BITXOR(INT(VAL / M16P1), INT(VAL1 / M16P1)) ;* udt/uv
+        VAL = (VAL4 * M16P1) + VAL3                        ;* udt/uv
+     END ELSE                                              ;* udt/uv
+        VAL = BITXOR(VAL, VAL1)                            ;* udt/uv
+     END                                                   ;* udt/uv
+*r83 VAL3 = 0 ; P1 = 1
+*r83 FOR P0 = 0 TO 31
+*r83    IF MOD(INT(VAL / P1), 2) # MOD(INT(VAL1 / P1), 2) THEN
+*r83       VAL3 = VAL3 + P1
+*r83    END
+*r83    P1 = P1 + P1
+*r83 NEXT P0
+*r83 VAL = VAL3
+     RETURN
+     *
+* ***************************************************** *
+* Rotate left the value passed in 'VAL' by 'VAL1' bits. *
+* use: (VAL << VAL1) | (VAL >> (32-VAL1))               *
+* ***************************************************** *
+8400*
+     VAL2 = VAL ; GOSUB 8000
+     VAL1 = INT(VAL2 / PWR(2, 32-VAL1))
+     GOSUB 8200
+     RETURN
+*
+     END
