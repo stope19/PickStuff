@@ -1,0 +1,569 @@
+     SUBROUTINE MD5(MODE, SVAL)
+*r83 SUBROUTINE MD5(MODE, SVAL, MAT MD5.STATE)
+* ****************************************************************** *
+* ****************************************************************** *
+* RSA Data Security, Inc., MD5 message-digest algorithm              *
+* Copyright (C) 1991-2, RSA Data Security, Inc. Created 1991. All    *
+* rights reserved.                                                   *
+*                                                                    *
+* License to copy and use this software is granted provided that it  *
+* is identified as the "RSA Data Security, Inc. MD5 Message-Digest   *
+* Algorithm" in all material mentioning or referencing this software *
+* or this function.                                                  *
+*                                                                    *
+* License is also granted to make and use derivative works provided  *
+* that such works are identified as "derived from the RSA Data       *
+* Security, Inc. MD5 Message-Digest Algorithm" in all material       *
+* mentioning or referencing the derived work.                        *
+*                                                                    *
+* RSA Data Security, Inc. makes no representations concerning either *
+* the merchantability of this software or the suitability of this    *
+* software for any particular purpose. It is provided "as is"        *
+* without express or implied warranty of any kind.                   *
+*                                                                    *
+* These notices must be retained in any copies of any part of this   *
+* documentation and/or software.                                     *
+*                                                                    *
+* Passed: MODE   0 = perform steps 1 to 3 on 'SVAL', return hash.    *
+*                1 = initialise message digest structure             *
+*                2 = add string passed in 'SVAL' to digest           *
+*                3 = finalise digest and return in 'SVAL'            *
+*                                                                    *
+*         SVAL     = string to add to digest if 'MODE' = 0 or 2      *
+*                                                                    *
+*    MD5.STATE     = digest structure, represented as an array.      *
+*                                                                    *
+* Return: SVAL     = MD5 value when 'MODE' = 0 or 3                  *
+*                                                                    *
+* Note: The 'MD5.STATE' array is used to preserve digest 'state'     *
+*       over multiple calls to this function. It must not be changed *
+*       by the calling program! For non R83 style platforms, this is *
+*       best defined in a 'named' common block.                (dmm) *
+*                                                                    *
+* 9 Sept 2001 - Fixed problem caused by ICONV() with "MX" working    *
+*               differently on UV in PRIME/IDEAL mode than in PICK   *
+*               mode.                                                *
+*             - Fixed problem with BITAND, BITOR and BITXOR Universe *
+*               functions working differently on some platforms if   *
+*               input data values are large (ie: Bit 31 set)         *
+* ****************************************************************** *
+* ****************************************************************** *
+     *
+     EQU MAX32   TO  4294967295  ;* 0xFFFFFFFF
+     EQU M32P1   TO  4294967296  ;* MAX32 + 1
+     EQU MAXINT  TO  2147483647  ;* 0X7FFFFFFF
+     EQU M16P1   TO  65536       ;* 0XFFFF + 1
+     EQU CV1     TO  2147483648  ;* 0x80000000
+     EQU CV2     TO  1073741824  ;* 0x40000000
+     EQU CV3     TO   536870912  ;* 2^29
+     *
+     COMMON /C$MD5/ MD5.STATE(7) ;* udt/uv
+*r83 DIM MD5.STATE(7)
+     *
+     DIM VALS(16)                ;* local storage
+     *
+     EQU MD5.CNT1 TO MD5.STATE(5)
+     EQU MD5.CNT2 TO MD5.STATE(6)
+     EQU MD5.BUFF TO MD5.STATE(7)
+     *
+     ON MODE + 1 GOSUB 1000, 2000, 3000, 4000
+     RETURN
+     *
+* ************************************** *
+* In a single call, return the MD5 hash  *
+* value for the string passed in 'SVAL'. *
+* ************************************** *
+1000*
+     GOSUB 2000                  ;* Initialise 
+     GOSUB 3000                  ;* Add 'SVAL' to digest
+     GOSUB 4000                  ;* Finalise, build MD5 string!
+     RETURN
+     *
+* **************************************** *
+* Initialise an MD5 operation. Set initial *
+* 'context' values and clear counters .etc *
+* **************************************** *
+2000*
+     MD5.STATE(1) = 1732584193   ;* 0x67452301
+     MD5.STATE(2) = 4023233417   ;* 0xefcdab89
+     MD5.STATE(3) = 2562383102   ;* 0x98badcfe
+     MD5.STATE(4) = 271733878    ;* 0x10325476
+     MD5.CNT1 = 0 ; MD5.CNT2 = 0 ; MD5.BUFF = ""
+     RETURN
+     *
+* *********************************************************** *
+* MD5 block update operation. Continues an MD5 message-digest *
+* operation processing another message block, and updating    *
+* the context.                                                *
+* *********************************************************** *
+3000*
+     * Update bitcount
+     INPUTLEN = LEN(SVAL)
+     IDX = MOD(INT(MD5.CNT1 / 8), 64)
+     VAL = INPUTLEN ; VAL1 = 3 ; GOSUB 8000
+     MD5.CNT1 = MD5.CNT1 + VAL
+     IF MD5.CNT1 < VAL THEN MD5.CNT2 = MD5.CNT2 + 1
+     MD5.CNT2 = MD5.CNT2 + INT(INPUTLEN / CV3)
+     *
+     PARTLEN = 64 - IDX
+     IF INPUTLEN >= PARTLEN THEN
+        IF IDX > 0 THEN
+           MD5.BUFF = MD5.BUFF[1, IDX]:SVAL[1, PARTLEN]
+        END ELSE MD5.BUFF = SVAL[1, PARTLEN]
+        GOSUB 5000               ;* Transform!
+        IPTR = PARTLEN + 1
+        LOOP WHILE IPTR + 63 <= INPUTLEN DO
+           * Process in 64 byte chunks!
+           MD5.BUFF = SVAL[IPTR, 64]
+           GOSUB 5000            ;* Transform!
+           IPTR = IPTR + 64
+        REPEAT
+        IDX = 0
+     END ELSE
+        IPTR = 1
+     END
+     * Save any remaining input in buffer!
+     IF IPTR <= INPUTLEN THEN
+        IF IDX > 0 THEN
+           MD5.BUFF = MD5.BUFF[1, IDX]:SVAL[IPTR, INPUTLEN]
+        END ELSE MD5.BUFF = SVAL[IPTR, INPUTLEN]
+     END
+     RETURN
+     *
+* ******************************************************* *
+* MD5 finalisation. Ends an MD5 message-digest operation. *
+* Return the MD5 hash value in variable 'SVAL'            *
+* ******************************************************* *
+4000*
+     VALS(1) = MD5.CNT1
+     VALS(2) = MD5.CNT2
+     VAL1 = 8 ; GOSUB 8500
+     BITSTR = VAL2               ;* bit count as a string!
+     * Set first char of padding to 0x80 (Always one free byte!)
+     IDX = MOD(INT(MD5.CNT1 / 8), 64)
+     IF IDX < 56 THEN PADLEN = 56 - IDX ELSE PADLEN = 120 - IDX
+     IF PADLEN > 1 THEN
+        SVAL = CHAR(128):STR(CHAR(0), PADLEN-1)
+     END ELSE SVAL = CHAR(128)
+     GOSUB 3000
+     SVAL = BITSTR
+     GOSUB 3000
+     *
+     VALS(1) = MD5.STATE(1)
+     VALS(2) = MD5.STATE(2)
+     VALS(3) = MD5.STATE(3)
+     VALS(4) = MD5.STATE(4)
+     VAL1 = 16 ; GOSUB 8500 
+     SVAL = VAL                  ;* Get MD5 hash value!
+     * Clear the buffer!
+     MD5.BUFF = ""
+     RETURN
+     *
+* *************************************************** *
+* MD5 basic transformation. Transforms based on input *
+* *************************************************** *
+5000*
+     A = MD5.STATE(1)
+     B = MD5.STATE(2)
+     C = MD5.STATE(3)
+     D = MD5.STATE(4)
+     * Decode string into an array of numbers
+     FOR I = 1 TO 16
+        IDX = I * 4 - 3
+        VALS(I) = SEQ(MD5.BUFF[IDX, 1]) + SEQ(MD5.BUFF[IDX+1, 1]) * 256
+        VALS(I) = (VALS(I) + SEQ(MD5.BUFF[IDX+2, 1]) * 65536)
+        VALS(I) = (VALS(I) + SEQ(MD5.BUFF[IDX+3, 1]) * 16777216)
+     NEXT I
+     *
+     * Round 1
+     AA = A; BB = B; CC = C; DD = D; X = VALS(1) ; S = 7
+     AC = 3614090360; GOSUB 6000; A = AA   ;* 0xD76AA478
+     AA = D; BB = A; CC = B; DD = C; X = VALS(2) ; S = 12
+     AC = 3905402710; GOSUB 6000; D = AA   ;* 0xE8C7B756
+     AA = C; BB = D; CC = A; DD = B; X = VALS(3) ; S = 17
+     AC = 606105819; GOSUB 6000; C = AA   ;* 0x242070DB
+     AA = B; BB = C; CC = D; DD = A; X = VALS(4) ; S = 22
+     AC = 3250441966; GOSUB 6000; B = AA   ;* 0xC1BDCEEE
+     AA = A; BB = B; CC = C; DD = D; X = VALS(5) ; S = 7
+     AC = 4118548399; GOSUB 6000; A = AA   ;* 0xF57C0FAF
+     AA = D; BB = A; CC = B; DD = C; X = VALS(6) ; S = 12
+     AC = 1200080426; GOSUB 6000; D = AA   ;* 0x4787C62A
+     AA = C; BB = D; CC = A; DD = B; X = VALS(7) ; S = 17
+     AC = 2821735955; GOSUB 6000; C = AA   ;* 0xA8304613
+     AA = B; BB = C; CC = D; DD = A; X = VALS(8) ; S = 22
+     AC = 4249261313; GOSUB 6000; B = AA   ;* 0xFD469501
+     AA = A; BB = B; CC = C; DD = D; X = VALS(9) ; S = 7
+     AC = 1770035416; GOSUB 6000; A = AA   ;* 0x698098D8
+     AA = D; BB = A; CC = B; DD = C; X = VALS(10) ; S = 12
+     AC = 2336552879; GOSUB 6000; D = AA   ;* 0x8B44F7AF
+     AA = C; BB = D; CC = A; DD = B; X = VALS(11) ; S = 17
+     AC = 4294925233; GOSUB 6000; C = AA   ;* 0xFFFF5BB1
+     AA = B; BB = C; CC = D; DD = A; X = VALS(12) ; S = 22
+     AC = 2304563134; GOSUB 6000; B = AA   ;* 0x895CD7BE
+     AA = A; BB = B; CC = C; DD = D; X = VALS(13) ; S = 7
+     AC = 1804603682; GOSUB 6000; A = AA   ;* 0x6B901122
+     AA = D; BB = A; CC = B; DD = C; X = VALS(14) ; S = 12
+     AC = 4254626195; GOSUB 6000; D = AA   ;* 0xFD987193
+     AA = C; BB = D; CC = A; DD = B; X = VALS(15) ; S = 17
+     AC = 2792965006; GOSUB 6000; C = AA   ;* 0xA679438E
+     AA = B; BB = C; CC = D; DD = A; X = VALS(16) ; S = 22
+     AC = 1236535329; GOSUB 6000; B = AA   ;* 0x49B40821
+     *
+     * Round 2
+     AA = A; BB = B; CC = C; DD = D; X = VALS(2) ; S = 5
+     AC = 4129170786; GOSUB 6100; A = AA   ;* 0xF61E2562
+     AA = D; BB = A; CC = B; DD = C; X = VALS(7) ; S = 9
+     AC = 3225465664; GOSUB 6100; D = AA   ;* 0xC040B340
+     AA = C; BB = D; CC = A; DD = B; X = VALS(12) ; S = 14
+     AC =  643717713; GOSUB 6100; C = AA   ;* 0x265E5A51
+     AA = B; BB = C; CC = D; DD = A; X = VALS(1) ; S = 20
+     AC = 3921069994; GOSUB 6100; B = AA   ;* 0xE9B6C7AA
+     AA = A; BB = B; CC = C; DD = D; X = VALS(6) ; S = 5
+     AC = 3593408605; GOSUB 6100; A = AA   ;* 0xD62F105D
+     AA = D; BB = A; CC = B; DD = C; X = VALS(11) ; S = 9
+     AC =   38016083; GOSUB 6100; D = AA   ;* 0x02441453
+     AA = C; BB = D; CC = A; DD = B; X = VALS(16) ; S = 14
+     AC = 3634488961; GOSUB 6100; C = AA   ;* 0xD8A1E681
+     AA = B; BB = C; CC = D; DD = A; X = VALS(5) ; S = 20
+     AC = 3889429448; GOSUB 6100; B = AA   ;* 0xE7D3FBC8
+     AA = A; BB = B; CC = C; DD = D; X = VALS(10) ; S = 5
+     AC =  568446438; GOSUB 6100; A = AA   ;* 0x21E1CDE6
+     AA = D; BB = A; CC = B; DD = C; X = VALS(15) ; S = 9
+     AC = 3275163606; GOSUB 6100; D = AA   ;* 0xC33707D6
+     AA = C; BB = D; CC = A; DD = B; X = VALS(4) ; S = 14
+     AC = 4107603335; GOSUB 6100; C = AA   ;* 0xF4D50D87
+     AA = B; BB = C; CC = D; DD = A; X = VALS(9) ; S = 20
+     AC = 1163531501; GOSUB 6100; B = AA   ;* 0x455A14ED
+     AA = A; BB = B; CC = C; DD = D; X = VALS(14) ; S = 5
+     AC = 2850285829; GOSUB 6100; A = AA   ;* 0xA9E3E905
+     AA = D; BB = A; CC = B; DD = C; X = VALS(3) ; S = 9
+     AC = 4243563512; GOSUB 6100; D = AA   ;* 0xFCEFA3F8
+     AA = C; BB = D; CC = A; DD = B; X = VALS(8) ; S = 14
+     AC = 1735328473; GOSUB 6100; C = AA   ;* 0x676F02D9
+     AA = B; BB = C; CC = D; DD = A; X = VALS(13) ; S = 20
+     AC = 2368359562; GOSUB 6100; B = AA   ;* 0x8D2A4C8A
+     *
+     * Round 3
+     AA = A; BB = B; CC = C; DD = D; X = VALS(6) ; S = 4
+     AC = 4294588738; GOSUB 6200; A = AA   ;* 0xFFFA3942
+     AA = D; BB = A; CC = B; DD = C; X = VALS(9) ; S = 11
+     AC = 2272392833; GOSUB 6200; D = AA   ;* 0x8771F681
+     AA = C; BB = D; CC = A; DD = B; X = VALS(12) ; S = 16
+     AC = 1839030562; GOSUB 6200; C = AA   ;* 0x6D9D6122
+     AA = B; BB = C; CC = D; DD = A; X = VALS(15) ; S = 23
+     AC = 4259657740; GOSUB 6200; B = AA   ;* 0xFDE5380C
+     AA = A; BB = B; CC = C; DD = D; X = VALS(2) ; S = 4
+     AC = 2763975236; GOSUB 6200; A = AA   ;* 0xA4BEEA44
+     AA = D; BB = A; CC = B; DD = C; X = VALS(5) ; S = 11
+     AC = 1272893353; GOSUB 6200; D = AA   ;* 0x4BDECFA9
+     AA = C; BB = D; CC = A; DD = B; X = VALS(8) ; S = 16
+     AC = 4139469664; GOSUB 6200; C = AA   ;* 0xF6BB4B60
+     AA = B; BB = C; CC = D; DD = A; X = VALS(11) ; S = 23
+     AC = 3200236656; GOSUB 6200; B = AA   ;* 0xBEBFBC70
+     AA = A; BB = B; CC = C; DD = D; X = VALS(14) ; S = 4
+     AC =  681279174; GOSUB 6200; A = AA   ;* 0x289B7EC6
+     AA = D; BB = A; CC = B; DD = C; X = VALS(1) ; S = 11
+     AC = 3936430074; GOSUB 6200; D = AA   ;* 0xEAA127FA
+     AA = C; BB = D; CC = A; DD = B; X = VALS(4) ; S = 16
+     AC = 3572445317; GOSUB 6200; C = AA   ;* 0xD4EF3085
+     AA = B; BB = C; CC = D; DD = A; X = VALS(7) ; S = 23
+     AC =   76029189; GOSUB 6200; B = AA   ;* 0x04881D05
+     AA = A; BB = B; CC = C; DD = D; X = VALS(10) ; S = 4
+     AC = 3654602809; GOSUB 6200; A = AA   ;* 0xD9D4D039
+     AA = D; BB = A; CC = B; DD = C; X = VALS(13) ; S = 11
+     AC = 3873151461; GOSUB 6200; D = AA   ;* 0xE6DB99E5
+     AA = C; BB = D; CC = A; DD = B; X = VALS(16) ; S = 16
+     AC =  530742520; GOSUB 6200; C = AA   ;* 0x1FA27CF8
+     AA = B; BB = C; CC = D; DD = A; X = VALS(3) ; S = 23
+     AC = 3299628645; GOSUB 6200; B = AA   ;* 0xC4AC5665
+     *
+     * Round 4
+     AA = A; BB = B; CC = C; DD = D; X = VALS(1) ; S = 6
+     AC = 4096336452; GOSUB 6300; A = AA   ;* 0xF4292244
+     AA = D; BB = A; CC = B; DD = C; X = VALS(8) ; S = 10
+     AC = 1126891415; GOSUB 6300; D = AA   ;* 0x432AFF97
+     AA = C; BB = D; CC = A; DD = B; X = VALS(15) ; S = 15
+     AC = 2878612391; GOSUB 6300; C = AA   ;* 0xAB9423A7
+     AA = B; BB = C; CC = D; DD = A; X = VALS(6) ; S = 21
+     AC = 4237533241; GOSUB 6300; B = AA   ;* 0xFC93A039
+     AA = A; BB = B; CC = C; DD = D; X = VALS(13) ; S = 6
+     AC = 1700485571; GOSUB 6300; A = AA   ;* 0x655B59C3
+     AA = D; BB = A; CC = B; DD = C; X = VALS(4) ; S = 10
+     AC = 2399980690; GOSUB 6300; D = AA   ;* 0x8F0CCC92
+     AA = C; BB = D; CC = A; DD = B; X = VALS(11) ; S = 15
+     AC = 4293915773; GOSUB 6300; C = AA   ;* 0xFFEFF47D
+     AA = B; BB = C; CC = D; DD = A; X = VALS(2) ; S = 21
+     AC = 2240044497; GOSUB 6300; B = AA   ;* 0x85845DD1
+     AA = A; BB = B; CC = C; DD = D; X = VALS(9) ; S = 6
+     AC = 1873313359; GOSUB 6300; A = AA   ;* 0x6FA87E4F
+     AA = D; BB = A; CC = B; DD = C; X = VALS(16) ; S = 10
+     AC = 4264355552; GOSUB 6300; D = AA   ;* 0xFE2CE6E0
+     AA = C; BB = D; CC = A; DD = B; X = VALS(7) ; S = 15
+     AC = 2734768916; GOSUB 6300; C = AA   ;* 0xA3014314
+     AA = B; BB = C; CC = D; DD = A; X = VALS(14) ; S = 21
+     AC = 1309151649; GOSUB 6300; B = AA   ;* 0x4E0811A1
+     AA = A; BB = B; CC = C; DD = D; X = VALS(5) ; S = 6
+     AC = 4149444226; GOSUB 6300; A = AA   ;* 0xF7537E82
+     AA = D; BB = A; CC = B; DD = C; X = VALS(12) ; S = 10
+     AC = 3174756917; GOSUB 6300; D = AA   ;* 0xBD3AF235
+     AA = C; BB = D; CC = A; DD = B; X = VALS(3) ; S = 15
+     AC =  718787259; GOSUB 6300; C = AA   ;* 0x2AD7D2BB
+     AA = B; BB = C; CC = D; DD = A; X = VALS(10) ; S = 21
+     AC = 3951481745; GOSUB 6300; B = AA   ;* 0xEB86D391
+     *
+     * Save new state
+     MD5.STATE(1) = MD5.STATE(1) + A
+     MD5.STATE(2) = MD5.STATE(2) + B
+     MD5.STATE(3) = MD5.STATE(3) + C
+     MD5.STATE(4) = MD5.STATE(4) + D
+     IF MD5.STATE(1) > MAX32 THEN MD5.STATE(1) = MOD(MD5.STATE(1), M32P1)
+     IF MD5.STATE(2) > MAX32 THEN MD5.STATE(2) = MOD(MD5.STATE(2), M32P1)
+     IF MD5.STATE(3) > MAX32 THEN MD5.STATE(3) = MOD(MD5.STATE(3), M32P1)
+     IF MD5.STATE(4) > MAX32 THEN MD5.STATE(4) = MOD(MD5.STATE(4), M32P1)
+     * Clear the buffer!
+     MD5.BUFF = ""
+     RETURN
+     *
+* ***************************************************** *
+* 'FF' transformation. Where: FF(a, b, c, d, x, s, ac)  *
+*      a += F(b, c, d) + x + ac                         *
+*      a = rotate_left(a, s)                            *
+*      a += b                                           *
+* Passed: AA, BB, CC, DD, X, S, AC - Return AA updated. *
+* ***************************************************** *
+6000*
+     V1 = BB ; V2 = CC ; V3 = DD
+     GOSUB 7000
+     VAL = AA + VAL + X + AC ; VAL1 = S
+     IF VAL > MAX32 THEN VAL = MOD(VAL, M32P1)
+     GOSUB 8400
+     AA = VAL + BB
+     IF AA > MAX32 THEN AA = MOD(AA, M32P1)
+     RETURN
+     *
+* ***************************************************** *
+* 'GG' transformation. Where: GG(a, b, c, d, x, s, ac)  *
+*      a += G(b, c, d) + x + ac                         *
+*      a = rotate_left(a, s)                            *
+*      a += b                                           *
+* Passed: AA, BB, CC, DD, X, S, AC - Return AA updated. *
+* ***************************************************** *
+6100*
+     V1 = BB ; V2 = CC ; V3 = DD
+     GOSUB 7100
+     VAL = AA + VAL + X + AC; VAL1 = S
+     IF VAL > MAX32 THEN VAL = MOD(VAL, M32P1)
+     GOSUB 8400
+     AA = VAL + BB
+     IF AA > MAX32 THEN AA = MOD(AA, M32P1)
+     RETURN
+     *
+* ***************************************************** *
+* 'HH' transformation. Where: HH(a, b, c, d, x, s, ac)  *
+*      a += F(b, c, d) + x + ac                         *
+*      a = rotate_left(a, s)                            *
+*      a += b                                           *
+* Passed: AA, BB, CC, DD, X, S, AC - Return AA updated. *
+* ***************************************************** *
+6200*
+     V1 = BB ; V2 = CC ; V3 = DD
+     GOSUB 7200
+     VAL = AA + VAL + X + AC; VAL1 = S
+     IF VAL > MAX32 THEN VAL = MOD(VAL, M32P1)
+     GOSUB 8400
+     AA = VAL + BB
+     IF AA > MAX32 THEN AA = MOD(AA, M32P1)
+     RETURN
+     *
+* ***************************************************** *
+* 'II' transformation. Where: II(a, b, c, d, x, s, ac)  *
+*      a += G(b, c, d) + x + ac                         *
+*      a = rotate_left(a, s)                            *
+*      a += b                                           *
+* Passed: AA, BB, CC, DD, X, S, AC - Return AA updated. *
+* ***************************************************** *
+6300*
+     V1 = BB ; V2 = CC ; V3 = DD
+     GOSUB 7300
+     VAL = AA + VAL + X + AC; VAL1 = S
+     IF VAL > MAX32 THEN VAL = MOD(VAL, M32P1)
+     GOSUB 8400
+     AA = VAL + BB
+     IF AA > MAX32 THEN AA = MOD(AA, M32P1)
+     RETURN
+     *
+* ********************************************************** *
+* 'F' basic transformation [ F(x,y,z) (x & y) | ((~x) & z) ] *
+* Where x,y & z are passed as 'V1', 'V2' and 'V3'            *
+* Result returned in variable 'VAL'                          *
+* ********************************************************** *
+7000*
+     VAL = MAX32 - V1
+     VAL1 = V3 ; GOSUB 8100 ; VAL2 = VAL
+     VAL = V1 ; VAL1 = V2 ; GOSUB 8100
+     VAL1 = VAL2 ; GOSUB 8200
+     RETURN
+     *
+* ********************************************************** *
+* 'G' basic transformation [ G(x,y,z) (x & z) | (y & (~z)) ] *
+* Where x,y & z are passed as 'V1', 'V2' and 'V3'            *
+* Result returned in variable 'VAL'                          *
+* ********************************************************** *
+7100*
+     VAL = MAX32 - V3
+     VAL1 = V2   ; GOSUB 8100 ; VAL2 = VAL
+     VAL = V1 ; VAL1 = V3 ; GOSUB 8100
+     VAL1 = VAL2 ; GOSUB 8200
+     RETURN
+     *
+* ********************************************************** *
+* 'H' basic transformation [ H(x,y,z) (x ^ y ^ z) ]          *
+* Where x,y & z are passed as 'V1', 'V2' and 'V3'            *
+* Result returned in variable 'VAL'                          *
+* ********************************************************** *
+7200*
+     VAL = V1  ; VAL1 = V2 ; GOSUB 8300
+     VAL1 = V3 ; GOSUB 8300
+     RETURN
+     *
+* ********************************************************** *
+* 'I' basic transformation [ I(x,y,z) (y ^ (x | (~z)) ]      *
+* Where x,y & z are passed as 'V1', 'V2' and 'V3'            *
+* Result returned in variable 'VAL'                          *
+* ********************************************************** *
+7300*
+     VAL = MAX32 - V3
+     VAL1 = V1 ; GOSUB 8200
+     VAL1 = V2 ; GOSUB 8300
+     RETURN
+     *
+* ********************************************* *
+* Shift left - Passed 'VAL' as value to work on *
+* and 'VAL1' as number of times to 'shift left'.*
+* We pretend 'VAL' is an unsigned 32 bit value. *
+* Note: We cannot always use the more simple    *
+*  VAL = VAL * PWR(2, VAL1)                     *
+*  IF VAL > MAX32 THEN VAL = MOD(VAL, M32P1)    *
+* because on some platforms (eg: R83) the first *
+* multiplication may cause numeric 'overflow'.  *
+* ********************************************* *
+8000*
+     VAL = VAL * PWR(2, VAL1)                  ;* udt/uv
+     IF VAL > MAX32 THEN VAL = MOD(VAL, M32P1) ;* udt/uv
+*r83 FOR PTR = 1 TO VAL1
+*r83    VAL = MOD(VAL, CV1)
+*r83    IF MOD(INT(VAL / CV2), 2) THEN
+*r83       VAL = (VAL - CV2) * 2 + CV1
+*r83    END ELSE VAL = VAL * 2
+*r83 NEXT PTR
+     RETURN
+     *
+* ********************************************* *
+* Logical 'AND' of two values. Both are assumed *
+* to be unsigned 32 bit integers. Passed 'VAL'  *
+* and 'VAL1', with result returned in 'VAL'     *
+* ********************************************* *
+8100*
+     IF VAL > MAXINT OR VAL1 > MAXINT THEN                 ;* udt/uv
+        VAL3 = BITAND(MOD(VAL, M16P1), MOD(VAL1, M16P1))   ;* udt/uv
+        VAL4 = BITAND(INT(VAL / M16P1), INT(VAL1 / M16P1)) ;* udt/uv
+        VAL = (VAL4 * M16P1) + VAL3                        ;* udt/uv
+     END ELSE                                              ;* udt/uv
+        VAL = BITAND(VAL, VAL1)                            ;* udt/uv
+     END                                                   ;* udt/uv
+*r83 VAL3 = 0 ; P2 = 1
+*r83 FOR PTR = 0 TO 31
+*r83    IF MOD(INT(VAL / P2), 2) AND MOD(INT(VAL1 / P2), 2) THEN
+*r83       VAL3 = VAL3 + P2
+*r83    END
+*r83    P2 = P2 * 2
+*r83 NEXT PTR
+*r83 VAL = VAL3
+     RETURN
+     *
+* ********************************************* *
+* Logical 'OR' of two values. Both are assumed  *
+* to be unsigned 32 bit integers. Passed 'VAL'  *
+* and 'VAL1', with result returned in 'VAL'     *
+* ********************************************* *
+8200*
+     IF VAL > MAXINT OR VAL1 > MAXINT THEN                ;* udt/uv
+        VAL3 = BITOR(MOD(VAL, M16P1), MOD(VAL1, M16P1))   ;* udt/uv
+        VAL4 = BITOR(INT(VAL / M16P1), INT(VAL1 / M16P1)) ;* udt/uv
+        VAL = (VAL4 * M16P1) + VAL3                       ;* udt/uv
+     END ELSE                                             ;* udt/uv
+        VAL = BITOR(VAL, VAL1)                            ;* udt/uv
+     END                                                  ;* udt/uv
+*r83 VAL3 = 0 ; P2 = 1
+*r83 FOR PTR = 0 TO 31
+*r83    IF MOD(INT(VAL / P2), 2) OR MOD(INT(VAL1 / P2), 2) THEN
+*r83       VAL3 = VAL3 + P2
+*r83    END
+*r83    P2 = P2 * 2
+*r83 NEXT PTR
+*r83 VAL = VAL3
+     RETURN
+     *
+* ********************************************* *
+* Logical 'XOR' of two values. Both are assumed *
+* to be unsigned 32 bit integers. Passed 'VAL'  *
+* and 'VAL1', with result returned in 'VAL'     *
+* ********************************************* *
+8300*
+     IF VAL > MAXINT OR VAL1 > MAXINT THEN                 ;* udt/uv
+        VAL3 = BITXOR(MOD(VAL, M16P1), MOD(VAL1, M16P1))   ;* udt/uv
+        VAL4 = BITXOR(INT(VAL / M16P1), INT(VAL1 / M16P1)) ;* udt/uv
+        VAL = (VAL4 * M16P1) + VAL3                        ;* udt/uv
+     END ELSE                                              ;* udt/uv
+        VAL = BITXOR(VAL, VAL1)                            ;* udt/uv
+     END                                                   ;* udt/uv
+*r83 VAL3 = 0 ; P2 = 1
+*r83 FOR PTR = 0 TO 31
+*r83    IF MOD(INT(VAL / P2), 2) # MOD(INT(VAL1 / P2), 2) THEN
+*r83       VAL3 = VAL3 + P2
+*r83    END
+*r83    P2 = P2 * 2
+*r83 NEXT PTR
+*r83 VAL = VAL3
+     RETURN
+     *
+* ***************************************************** *
+* Rotate left the value passed in 'VAL' by 'VAL1' bits. *
+* use: (VAL << VAL1) | (VAL >> (32-VAL1))               *
+* ***************************************************** *
+8400*
+     VAL2 = VAL ; GOSUB 8000
+     VAL1 = INT(VAL2 / PWR(2, 32-VAL1))
+     GOSUB 8200
+     RETURN
+     *
+* ***************************************************** *
+* Encode array of numbers into an output string. Length *
+* is assumed to be a multiple of 4. String is returned  *
+* in variable 'VAL', and length passed in 'VAL1'        *
+* Also return a string in VAL2 that represents an ASCII *
+* version of the returned hex string. Do this as some   *
+* platforms (eg: UV in IDEAL/PRIME mode) cannot convert *
+* using the ASCIISTR = ICONV(HEXSTR, "MX") construct.   *
+* ***************************************************** *
+8500*
+     VAL = "" ; VAL2 = ""; VAL5 = 1
+     FOR PTR = 1 TO VAL1 STEP 4
+        VAL3 = VALS(VAL5)
+        VAL4 = MOD(VAL3, 256)
+        VAL2 = VAL2:CHAR(VAL4)
+        VAL = VAL:OCONV(VAL4, 'MCDX') "R%2"
+        VAL4 = MOD(INT(VAL3/256), 256)
+        VAL2 = VAL2:CHAR(VAL4)
+        VAL = VAL:OCONV(VAL4, 'MCDX') "R%2"
+        VAL4 = MOD(INT(VAL3/65536), 256)
+        VAL2 = VAL2:CHAR(VAL4)
+        VAL = VAL:OCONV(VAL4, 'MCDX') "R%2"
+        VAL4 = MOD(INT(VAL3/16777216), 256)
+        VAL2 = VAL2:CHAR(VAL4)
+        VAL = VAL:OCONV(VAL4, 'MCDX') "R%2"
+        VAL5 = VAL5 + 1
+     NEXT PTR
+     RETURN
+*
+     END
