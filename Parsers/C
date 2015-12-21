@@ -1,0 +1,540 @@
+* PROGRAM: C               ( A CALCULATOR PROGRAM )
+*
+*  AUTHOR: Dave
+*
+* PURPOSE: To provide the user with a calculator facility invokable
+*          from TCL that has all the arithmetic functions
+*          of DATA/BASIC including functions. (COS,TAN..etc)
+*          Unary operators are also supported. The result of a
+*          operation can be stored in a user defined variable
+*          which may be used in subsequent operations. If no
+*          variable is defined, the result is placed into the 
+*          default variable 'X'.
+*
+*      Commands are:  L - List all defined variables & contents
+*                     R - Clear/Reset the variable list
+*                     S - Toggle statistics mode ON/OFF
+*                     H - Toggle HEX arithmetic mode
+*                     I - Revision detail enquiry
+*                     ? - Display some help info
+*
+*      NB: Statistics mode when invoked by the 'S' command allows
+*          the user to enter (one at a time) a series of numbers
+*          (or expressions). When the 'S' command is used again, or
+*          this function is exited, some basic statistics for these
+*          numbers are displayed.
+*
+*          The expression to be evaluated is entered as in DATA/BASIC,
+*          e.g.  C=SQRT(14.7*14.7+17.8*17.8-2*14.7*17.8*COS(43.3254))
+*
+*                or  PWR(17.5*3.14159,2)
+*
+*          When hexadecimal mode is invoked, (using 'H' command),
+*          simple integer base 16 arithmetic is possible.
+*
+*          Modify the half intensity ON/OFF constants to suit your system
+*
+* [01] 1/96 - added bitwise functions OR(x,y) AND(x,y) XOR(x,y) NOT(x)
+***********************************************************************
+     *
+     PRECISION 5
+     *
+     EQU AM TO CHAR(254), VM TO CHAR(253)
+     EQU TRUE TO 1, FALSE TO 0, ESC TO CHAR(27)
+     *
+     DIM STACK(50), OUT(50), OPS(50), T(3,11)
+     *
+     PROMPT '?'      
+     HON  = @(-7)
+     HOFF = @(-8)
+     A = ',-+*/()$'                            ;* Define operators 
+     B = '103344289'                           ;* Operator precedence
+     STARS = HON:'***':HOFF                     
+     * Function list
+     F = 'ABS':VM:'INT':VM:'DCONV':VM:'COS':VM:'SIN':VM:'TAN':VM:'SQRT'
+     F = F:VM:'LN':VM:'LOG':VM:'EXP':VM:'RND':VM:'PRIME':VM:'ROUND':VM:'MOD'
+     F = F:VM:'PWR':VM:'PER':VM:'OR':VM:'AND':VM:'XOR':VM:'NOT'
+     * Function precedence
+     P = 6:VM:6:VM:6:VM:6:VM:6:VM:6:VM:6:VM:6:VM:6:VM:6:VM:6:VM:6:VM:7:VM:7
+     P = P:VM:7:VM:7:VM:7:VM:7:VM:7:VM:6:VM:10
+     * Define command options, and full operator/function list
+     OPTIONS = 'L':VM:'R':VM:'S':VM:'H':VM:'?':VM:'I'
+     OP.LIST = '+':VM:'-':VM:'*':VM:'/':VM:'(':VM:')':VM:',':VM:F
+     * Setup default symbol table entries
+     DEFLIST    = 'DATE':VM:'PI':VM:'E'        ;* Default variable names
+     DEFLIST<2> = DATE():VM:3.14159:VM:2.71828 ;* Default variable values
+     DEFLIST<3> = 0:VM:0:VM:0                  ;* Default types flags (1=HEX)
+     *
+     *--- Setup the parsing table (we use a simple PREDICTIVE parser)
+     *
+     MAT T = '' ; TF = 'T':VM:'F'
+     *
+     T(1, 2) = TF ; T(2, 1) = 'N'     ; T(3, 2) = 1
+     T(1, 3) = TF ; T(2, 4) = 3:VM:TF ; T(3, 3) = 2:VM:'E':VM:8
+     T(1, 6) = TF ; T(2, 5) = 4:VM:TF ; T(3, 6) = 5:VM:'E'
+     T(1, 7) = TF ; T(2, 9)  = 'N'    ; T(3, 7) = 6:VM:2:VM:'E':VM:8
+     T(1, 8) = TF ; T(2, 10) = 'N'    ; T(3, 8) = 7:VM:2:VM:'E':VM:0:VM:'E':VM:8
+     *
+     *--- Prompt for and accept input from user
+     *
+     CRT HON:'CALCULATOR (Rev 1.1) - Enter ? for help':HOFF
+     LIST = DEFLIST
+     STAT = FALSE
+     HEX = FALSE
+     LOOP
+        INPUT EXPR
+        LOOP I=INDEX(EXPR,' ',1) UNTIL I=0 DO
+           EXPR=EXPR[1,I-1]:EXPR[I+1,32267]    ;* Strip out spaces
+        REPEAT
+     UNTIL EXPR='' DO
+        LOCATE(EXPR,OPTIONS,1;N) ELSE NULL
+        ON N GOSUB 3500,4000,3000,4500,5000,5500,1000
+     REPEAT
+     IF STAT THEN IF OBS > 0 THEN GOSUB 3000   ;* Calc stats on exit ?
+     STOP
+     *
+1000 CP=1 ; OP=1 ; PREV.TYPE=9 ; OPS.TOP=2 ; OPSTK='E' ; OPS(1)=''
+     *
+     EXPR=EXPR:'$'          ;* Add expression terminator character
+     I=INDEX(EXPR,'=',1)    ;* Is there an assignment character ?
+     IF I > 0 THEN
+        RESULT=EXPR[1,I-1]  ;* Yes get the variable name
+        RESERVED.WORD=TRUE
+        LOCATE(RESULT,OP.LIST,1;N) ELSE RESERVED.WORD=FALSE
+        IF RESERVED.WORD OR NUM(RESULT) THEN
+           CRT HON:'Invalid assignment variable name. Use something else':HOFF
+           RETURN
+        END ELSE
+           EXPR=EXPR[I+1,32267]
+        END
+     END ELSE
+        RESULT='X'          ;* No assignment specified so save result in 'X'
+     END
+     *
+     *--- PARSE the input expression
+     *
+     TOP=1
+     GOSUB 1500             ;* get first input token
+     LOOP
+        X=OPSTK<1,1>        ;* Get symbol from top of stack
+        IF NUM(X) THEN
+           IF X=Y THEN
+              OPSTK=DELETE(OPSTK,1,1)   ;* POP the stack
+              GOSUB 2000                ;* Put token into output
+              GOSUB 1500                ;* Get next input token
+           END ELSE
+              CRT HON:'Missing or invalid right parenthesis in expression':HOFF
+              RETURN
+           END
+        END ELSE
+           CELL=T(INDEX('EFT',X,1),Y+1)       ;* Get parsing table entry
+           IF CELL # '' THEN
+              OPSTK=DELETE(OPSTK,1,1)         ;* POP the stack
+              IF CELL # 'N' THEN
+                 OPSTK=INSERT(OPSTK,1,1;CELL) ;* PUSH symbol onto stack
+              END
+           END ELSE
+              CRT HON:'Missing operand or unknown variable name in expression':HOFF
+              RETURN
+           END
+        END
+     UNTIL OPSTK='' DO REPEAT
+     IF Y # 9 THEN
+        CRT HON:'Unexpected input - Invalid expression':HOFF
+        RETURN
+     END
+     LOOP
+        OPS.TOP=OPS.TOP-1
+     UNTIL OPS.TOP=0 DO
+        OUT(TOP)=OPS(OPS.TOP)
+        TOP=TOP+1
+     REPEAT
+     GOSUB 2500       ;* CALCULATE result of expression
+     RETURN
+     *
+     *--- Get the NEXT input token from the input expression
+     *
+1500 C=EXPR[CP,1]
+     Y=B[INDEX(A,C,1)+1,1]
+     IF Y=1 THEN
+        LOOP CP=CP+1 UNTIL INDEX(A,EXPR[CP,1],1) DO REPEAT
+        TOKEN=EXPR[OP,CP-OP]
+        IF NOT(NUM(TOKEN)) THEN
+           VARIABLE=TRUE
+           LOCATE(TOKEN,LIST,1;N) ELSE VARIABLE=FALSE
+           IF NOT(VARIABLE) THEN
+              FUNCTION=TRUE
+              LOCATE(TOKEN,F,1;N) ELSE FUNCTION=FALSE
+              IF NOT(HEX) OR FUNCTION THEN Y=P<1,N>
+           END ELSE
+              TOKEN=LIST<2,N>
+              IF LIST<3,N>=TRUE THEN
+                 IF NOT(HEX) THEN TOKEN=OCONV(TOKEN,'MCXD')
+              END ELSE
+                 IF HEX THEN TOKEN=OCONV(TOKEN,'MCDX')
+              END
+           END
+        END
+     END ELSE
+        IF Y=3 THEN
+           IF INDEX('023459',PREV.TYPE,1) THEN
+              IF C='-' THEN C='@' ELSE C='%'
+              Y=5
+           END
+        END
+        CP=CP+1
+        TOKEN=C
+     END
+     PREV.TYPE=Y
+     OP=CP
+     RETURN
+     *
+     *--- Put outputed token from parser into output stack in 'RPN' format
+     *
+2000 BEGIN CASE
+       CASE Y=1
+            IF HEX THEN TOKEN=OCONV(TOKEN,'MCXD')
+            OUT(TOP)=OCONV(TOKEN,'MD50')+0   ;* Force rounding
+            TOP=TOP+1
+       CASE Y=2 OR Y=5
+            OPS(OPS.TOP)=TOKEN
+            OPS.TOP=OPS.TOP+1
+       CASE Y=3 OR Y=4 OR Y=6 OR Y=7
+            LOOP
+               ST=B[INDEX(A,OPS(OPS.TOP-1),1)+1,1]
+               IF ST=1 THEN
+                  LOCATE(OPS(OPS.TOP-1),F,1;N) ELSE NULL
+                  ST=P<1,N>
+               END
+            UNTIL Y > ST DO
+               OPS.TOP=OPS.TOP-1
+               OUT(TOP)=OPS(OPS.TOP)
+               TOP=TOP+1
+            REPEAT
+            OPS(OPS.TOP)=TOKEN
+            OPS.TOP=OPS.TOP+1
+       CASE Y=8
+            LOOP
+               OPS.TOP=OPS.TOP-1
+            UNTIL OPS(OPS.TOP)='(' DO
+               OUT(TOP)=OPS(OPS.TOP)
+               TOP=TOP+1
+            REPEAT
+       CASE 1
+            LOOP UNTIL OPS(OPS.TOP-1)='(' DO
+               OPS.TOP=OPS.TOP-1
+               OUT(TOP)=OPS(OPS.TOP)
+               TOP=TOP+1
+            REPEAT
+     END CASE
+     RETURN
+     *
+     *--- CALCULATE result of expression
+     *
+2500 X=TOP-2              ;* Number of elements in output stack
+     TOP=0                ;* Reset top of stack pointer
+     FOR I=1 TO X
+         TOKEN=OUT(I)
+         BEGIN CASE
+           CASE TOKEN='+'
+                STACK(TOP-1)=STACK(TOP-1) + STACK(TOP)
+                TOP=TOP-1
+           CASE TOKEN='-'
+                STACK(TOP-1)=STACK(TOP-1) - STACK(TOP)
+                TOP=TOP-1
+           CASE NUM(TOKEN)
+                TOP=TOP+1
+                STACK(TOP)=TOKEN
+           CASE TOKEN='*'
+                STACK(TOP-1)=STACK(TOP-1) * STACK(TOP)
+                TOP=TOP-1
+           CASE TOKEN='/'
+                IF STACK(TOP)=0 THEN
+                   CRT HON:'Cannot divide by zero - check your expression':HOFF
+                   RETURN
+                END
+                STACK(TOP-1)=STACK(TOP-1) / STACK(TOP)
+                TOP=TOP-1
+           CASE TOKEN='@'
+                STACK(TOP)=STACK(TOP)*(-1) ;* Unary MINUS
+           CASE TOKEN='%' OR TOKEN='ABS'
+                STACK(TOP)=ABS(STACK(TOP)) ;* Unary PLUS
+           CASE TOKEN='INT' 
+                STACK(TOP)=INT(STACK(TOP))
+           CASE TOKEN='DCONV'
+                ODATE=STACK(TOP) 'R%6'
+                STACK(TOP)=ICONV(ODATE[1,2]:'/':ODATE[3,2]:'/':ODATE[5,2],'D')
+                IF STACK(TOP)='' THEN
+                   CRT HON:'Invalid date for conversion. Must be DDMMYY':HOFF
+                   RETURN
+                END
+           CASE TOKEN='COS' 
+                STACK(TOP)=COS(STACK(TOP))
+           CASE TOKEN='SIN' 
+                STACK(TOP)=SIN(STACK(TOP))
+           CASE TOKEN='TAN' 
+                IF MOD(STACK(TOP),180)=90 THEN
+                   CRT HON:'TANGENT is undefined for ODD multiples of 90 (90,270..etc)':HOFF
+                   RETURN
+                END
+                STACK(TOP)=TAN(STACK(TOP))
+           CASE TOKEN='SQRT'
+                IF STACK(TOP) < 0 THEN
+                   CRT HON:'Cannot take the SQUARE ROOT of a NEGATIVE argument':HOFF
+                   RETURN
+                END
+                STACK(TOP)=SQRT(STACK(TOP))
+           CASE TOKEN='LN'
+                IF STACK(TOP) LE 0 THEN
+                   CRT HON:'Argument for LN must be greater than zero':HOFF
+                   RETURN
+                END
+                STACK(TOP)=LN(STACK(TOP))
+           CASE TOKEN='LOG'
+                IF STACK(TOP) LE 0 THEN
+                   CRT HON:'Argument for LOG must be greater than zero':HOFF
+                   RETURN
+                END
+                STACK(TOP)=LN(STACK(TOP))/2.3026
+           CASE TOKEN='EXP'
+                STACK(TOP)=EXP(STACK(TOP))
+           CASE TOKEN='RND'
+                IF STACK(TOP) < 1 THEN
+                   CRT HON:'Argument in RND statment must be greater than or equal to one':HOFF
+                   RETURN
+                END
+                STACK(TOP)=RND(STACK(TOP))
+           CASE TOKEN='PRIME'
+                IF STACK(TOP) < 1 THEN
+                   PRINT HON:'Expression must be > 0 to calculate next PRIME number':HOFF
+                   RETURN
+                END
+                IF STACK(TOP) > 3 THEN
+                   N=INT(STACK(TOP)) ; M=N/2
+                   IF M=INT(M) THEN N=N+1
+                   LOOP
+                      J=1
+                      OK=TRUE
+                      M=SQRT(N)
+                      IF NOT(M=INT(M)) THEN
+                         LOOP
+                            J=J+2
+                         UNTIL J > M OR NOT(OK) DO
+                            Y=N/J
+                            IF Y=INT(Y) THEN OK=FALSE
+                         REPEAT
+                      END ELSE OK=FALSE
+                   UNTIL OK DO N=N+2 REPEAT
+                   STACK(TOP)=N
+                END
+           CASE TOKEN='ROUND'
+                IF STACK(TOP) < 0 THEN
+                   CRT HON:'Argument denoting rounding "template" must be positive':HOFF
+                   RETURN
+                END
+                IF STACK(TOP-1) < 0 THEN SIGN=(-1) ELSE SIGN=1
+                STACK(TOP-1)=SIGN*INT(0.5+ABS(STACK(TOP-1))/STACK(TOP))*STACK(TOP)
+                TOP=TOP-1
+           CASE TOKEN='MOD'
+                IF STACK(TOP)=0 THEN
+                   CRT HON:'Second argument for MOD must be greater than zero':HOFF
+                   RETURN
+                END
+                STACK(TOP-1)=MOD(STACK(TOP-1),STACK(TOP))
+                TOP=TOP-1
+           CASE TOKEN='PWR'
+                IF STACK(TOP-1) < 0 AND STACK(TOP) # INT(STACK(TOP)) THEN
+                   CRT HON:'Cannot raise a NEGATIVE number to a NON-INTEGER value':HOFF
+                   RETURN
+                END
+                STACK(TOP-1)=PWR(STACK(TOP-1),STACK(TOP))
+                TOP=TOP-1
+           CASE TOKEN='PER'
+                STACK(TOP-1)=STACK(TOP)/100*STACK(TOP-1)
+                TOP=TOP-1
+           CASE TOKEN='OR'
+                Y = STACK(TOP-1) ; N = STACK(TOP) ; OK = 0
+                FOR J = 0 TO 32
+                   M = PWR(2, J)
+                   IF MOD(INT(Y/M),2) OR MOD(INT(N/M),2) THEN OK = OK + M
+                NEXT J
+                STACK(TOP-1) = OK
+                TOP=TOP-1
+           CASE TOKEN='AND'
+                Y = STACK(TOP-1) ; N = STACK(TOP) ; OK = 0
+                FOR J = 0 TO 32
+                   M = PWR(2, J)
+                   IF MOD(INT(Y/M),2) AND MOD(INT(N/M),2) THEN OK = OK + M
+                NEXT J
+                STACK(TOP-1) = OK
+                TOP=TOP-1
+           CASE TOKEN='XOR'
+                Y = STACK(TOP-1) ; N = STACK(TOP) ; OK = 0
+                FOR J = 0 TO 32
+                   M = PWR(2, J)
+                   IF MOD(INT(Y/M),2) # MOD(INT(N/M),2) THEN OK = OK + M
+                NEXT J
+                STACK(TOP-1) = OK
+                TOP=TOP-1
+           CASE TOKEN='NOT'
+                N = STACK(TOP) ; OK = 0
+                FOR J = 0 TO 32
+                   M = PWR(2, J)
+                   IF MOD(INT(N/M),2) = 0 THEN OK = OK + M
+                NEXT J
+                STACK(TOP) = OK
+           CASE 1
+                CRT HON:'Unexpected input - Invalid expression':HOFF
+                RETURN
+         END CASE
+     NEXT I
+     CRT
+     IF HEX THEN
+        DEC=STACK(TOP)
+        STACK(TOP)=OCONV(STACK(TOP),'MCDX')
+        CRT STACK(TOP),'(':DEC:')'
+     END ELSE
+        CRT STACK(TOP)
+     END
+     IF STAT THEN
+        ANSWER=ICONV(STACK(TOP),'MD5')
+        LOCATE(ANSWER,VALUES;N;'AR') ELSE NULL
+        VALUES=INSERT(VALUES,N;ANSWER)
+        OBS=OBS+1
+     END
+     LOCATE(RESULT,LIST,1;N;'AL') THEN
+        LIST<2,N>=STACK(TOP)
+        LIST<3,N>=HEX
+     END ELSE
+        LIST=INSERT(LIST,1,N;RESULT)
+        LIST=INSERT(LIST,2,N;STACK(TOP))
+        LIST=INSERT(LIST,3,N;HEX)
+     END
+     CRT
+     RETURN
+     *
+     *--- Toggle STATISTICS mode, calculating if required
+     *
+3000 IF NOT(STAT) THEN
+        IF NOT(HEX) THEN
+           VALUES='' ; OBS=0 ; STAT=TRUE
+           CRT HON:'Statistics mode is ':HOFF:'ON':HON:' enter data then S again to calculate':HOFF
+        END ELSE
+           CRT HON:'Statistics mode invalid while ':HOFF:'HEX':HON:' mode active!':HOFF
+        END
+     END ELSE
+         STAT=FALSE
+         IF OBS > 1 THEN
+            M=OCONV(VALUES<1>,'MD5')+0
+            MIN=M ; MAX=M ; SUMX=M ; S=0
+            FOR I=2 TO OBS
+                N=OCONV(VALUES<I>,'MD5')+0
+                X=N-M
+                M=M+X/I
+                S=S+X*(N-M)
+                SUMX=SUMX+N
+                IF N > MAX THEN MAX=N
+                IF N < MIN THEN MIN=N
+            NEXT I
+            N=INT(OBS/2)
+            IF (OBS/2)=N THEN
+               N=OCONV((VALUES<N>+VALUES<N+1>)/2,'MD5')+0
+            END ELSE
+               N=OCONV(VALUES<N+1>,'MD5')+0
+            END
+            CRT
+            CRT STARS:' Statistics ':STARS
+            CRT
+            CRT HON:' Number of values   :':HOFF:OBS
+            CRT HON:' Sum of values      :':HOFF:SUMX
+            CRT HON:' Arithmetic mean    :':HOFF:SUMX/OBS
+            CRT HON:' Standard deviation :':HOFF:SQRT(S/OBS)
+            CRT HON:' Largest value      :':HOFF:MAX
+            CRT HON:' Smallest value     :':HOFF:MIN
+            CRT HON:' Median value       :':HOFF:N
+            CRT
+         END ELSE
+            CRT HON:'Must be at least ':HOFF:'2':HON:' values present to calculate statistics':HOFF
+         END
+     END
+     RETURN
+     *
+     *--- Display the variable list & its contents
+     *
+3500 CRT
+     CRT STARS:' Variable List ':STARS
+     CRT
+     I=1
+     LOOP
+        N=LIST<1,I>
+     UNTIL N='' DO
+        CRT ' ':N"L#15":LIST<2,I>
+        I=I+1
+     REPEAT
+     CRT
+     CRT STARS:' Current Status ':STARS
+     CRT
+     IF STAT THEN MSG='ON' ELSE MSG='OFF'
+     CRT HON:' Statistics mode is ':HOFF:MSG
+     IF HEX THEN MSG='ON' ELSE MSG='OFF'
+     CRT HON:' Hex math mode is   ':HOFF:MSG
+     CRT
+     RETURN
+     *
+     *--- Initialise the variable list
+     *
+4000 LIST=DEFLIST
+     CRT
+     CRT HON:'Variable list has been':HOFF:' RESET ':HON:'to default condition':HOFF
+     GOSUB 3500
+     RETURN
+     *
+     *--- Toggle the HEXADECIMAL arithmetic mode
+     *
+4500 IF HEX THEN
+        CRT HON:'Hexadecimal mode ':HOFF:'OFF'
+        HEX=FALSE
+     END ELSE
+        IF NOT(STAT) THEN
+           CRT HON:'Hexadecimal mode ':HOFF:'ON'
+           HEX=TRUE
+        END ELSE
+           CRT HON:'Cannot invoke HEX mode while Statistics mode is ON!':HOFF
+        END
+     END
+     RETURN
+     *
+     *--- Display some HELP information
+     *
+5000 CRT HOFF:'OPERATORS':HON:' :     + - (Unary) * / + -        (In order of precedence)'
+     CRT
+     CRT HOFF:'FUNCTIONS':HON:' :     ABS(E)     Generates absolute (positive) value of expression'
+     CRT SPACE(16):'COS(E)     Calculate the COSINE of expression'
+     CRT SPACE(16):'EXP(E)     Raise "e" to the power of expression'
+     CRT SPACE(16):'INT(E)     Generate INTEGER value of expression'
+     CRT SPACE(16):'DCONV(E)   Convert date (DDMMYY) to internal format'
+     CRT SPACE(16):'LN(E)      Calculates natural LOGARITHM of expression'
+     CRT SPACE(16):'LOG(E)     Common (Base 10) LOGARITHM of expression'
+     CRT SPACE(16):'MOD(E,E)   Calculates the MODULO of two expressions'
+     CRT SPACE(16):'ROUND(E,E) Round first expresion by second, eg ROUND(1.234,.25)'
+     CRT SPACE(16):'PER(E,E)   Return first expression PERCENTAGE of the second'
+     CRT SPACE(16):'PRIME(E)   Calculate NEXT PRIME number from expression'
+     CRT SPACE(16):'PWR(E,E)   Raise first expression to the value of the second'
+     CRT SPACE(16):'RND(E)     Generate a RANDOM NUMBER between 0 and expression -1'
+     CRT SPACE(16):'SIN(E)     Calculate SINE value of expression'
+     CRT SPACE(16):'SQRT(E)    Calculate the SQUARE ROOT of expression'
+     CRT SPACE(16):'TAN(E)     Calculate the TANGENT value of expression'
+     CRT HOFF
+     CRT 'COMMANDS':HON:'  :     L    LIST the variable table   -   R   RESET the variable table'
+     CRT SPACE(16):'S    TOGGLE statistics mode    -   H   TOGGLE integer HEX mode'
+     CRT SPACE(16):'?    This HELP message         -   I   Display revision detail':HOFF
+     RETURN
+     *
+     *--- Display Revision 
+     *
+5500 CRT
+     CRT HON:'Calculator [Rev 1.0]':HOFF
+     CRT
+     RETURN
+*
+     END
