@@ -1,0 +1,755 @@
+SUBROUTINE BTREE.UPDATE(MODE, F.INDX, INDEX.DEFN, ORIG.REC, RECORD, RKEY, ERRFLG)
+* Generic Btree update function  -  [dmm Feb '96]
+***************************************************************************
+* Passed: MODE - 1 = insert, 2 = amend, 3 = delete
+*       F.INDX - file handle to index file
+*   INDEX.DEFN - index definition item for file
+*     ORIG.REC - data item, prior to updates ('MODE' = 2 or 3)
+*       RECORD - data item for file being indexed ('MODE' = 1 or 2)
+*         RKEY - key to data item 'RECORD' & 'ORIG.REC'
+*
+* Returned:
+*       ERRFLG - 0 = no error, 1 = bad 'MODE' value
+*                2 = index is corrupt
+*
+* Notes:
+*
+* INDEX.DEFN structure:
+* <1. m> = mv'd - indexed attribute reference
+*          eg: 0 (key), 1 (attr 1), 1.4 (attr 1, value 4)
+* <2. m> = mv'd - expressions (for OCONV), corresponding to <1.m>
+* <3. m> = mv'd - input conversion codes, corresponding to <1.m>
+* <4. m> = mv'd - indexed string justification codes ('null' = AL)
+* <5. m> = mv'd - key value justification codes ('null' = 1)
+* <6. m> = mv'd - maximum node sizes (in bytes) if not default
+* <7. m> = mv'd - flags (implemented as 'bit flags') where:
+*    bit 0 = true, if MV/SMV index info to be stored
+*        1 = true, if indexed string must be 'upper cased'
+*        2 = true, if unique values only may be indexed
+*        3 = true, if null values are to be ignored
+*        4 = true, if indexing on each word
+*
+* Node structure:
+* <1. m> = Indexed strings
+* <2. m> = Node ptrs (if <3, 1> = 0), else key values
+* <3, 1> = 1 = leaf, 0 = non-leaf
+* <3, 2> = number of entries in node
+* <3, 3> = left sibling node   [leftmost node if root]
+* <3, 4> = right sibling node  [rightmost node if root]
+* <3, 5> = pointer to parent node [null if root]
+*        [values <3, 6> to <3, n> stored in root node only!]
+* <3, 6> = last used node item-id
+* <3, 7> = tree 'depth'
+* <3, 8> = sort sequence for <1>
+*          one of: AL, AR, DL, DR ('null' = AL)
+* <3, 9> = sort sequence for <2>
+*          one of: 1, -1, AL, AR, DL, DR ('null' = 1)
+* <3, 10>= flag to indicate if MV/SMV pointers stored in index
+* <3, 11>= max node size (bytes) If < 100, defaults to 500
+* <4. m> = MV/SMV index pairs (svm delimited) for each leaf entry,
+*          if flag in <3, 10> set to 'true'. Else null.
+*
+* Index locking: The index will be locked to a single user for the duration
+* of an index update. If an error is encountered during update, the lock
+* will remain in force until any error correction/reporting logic has been
+* executed. The lock should then be released, and processing continues.
+*
+* Rel: 1.0
+***************************************************************************
+*
+     EQU AM TO CHAR(254), VM TO CHAR(253), SVM TO CHAR(252)
+     EQU SPCE TO CHAR(32), TRUE TO 1, FALSE TO 0, ROOT.ID TO 0, DOT TO '.'
+*
+     EQU NODE.SIZE     TO 500   ;* Default node size
+     EQU BIG.INT       TO 99999 ;* A large integer
+*
+     EQU E.BAD.MODE    TO 1     ;* Bad 'MODE' error code
+     EQU E.IDX.CORRUPT TO 2     ;* Index is corrupt!
+*
+     EQU MODE.INS      TO 1     ;* Insert
+     EQU MODE.AMEND    TO 2     ;* Amend
+     EQU MODE.DEL      TO 3     ;* Delete
+*
+     ERRFLG = FALSE
+     KVAL = RKEY<1, 1, 1>       ;* Ensure key is valid!
+     NO.BTREES = DCOUNT(INDEX.DEFN<1>, VM)
+     FOR INDEX.NO = 1 TO NO.BTREES UNTIL ERRFLG
+        POS = INDEX.DEFN<1, INDEX.NO>
+        IF POS > '' THEN        ;* Ignore 'null' definitions!
+           GOSUB 1000
+           IF ERRFLG THEN
+*
+*             If an error has occurred, then the tree being updated will
+*             still be locked. Insert remedial logic, or error reporting
+*             here. Then clear the lock and exit/continue. If error flag
+*             left set, then update function terminates!
+*
+              CRT ERRFLG:" - Error in index ":INDEX.NO:", update mode = ":MODE
+              RELEASE F.INDX, PFX:ROOT.ID
+              ERRFLG = FALSE    ;* Reset error flag!
+           END
+        END
+     NEXT INDEX.NO
+     RETURN
+*
+* ****************************************** *
+* Mainline logic to update index 'INDEX.NO', *
+* where index is defined by value of 'POS'.  *
+* ****************************************** *
+1000*
+     AMC = FIELD(POS, DOT, 1) + 0
+     IF AMC > 0 THEN
+        VMC = FIELD(POS, DOT, 2) + 0
+        IF VMC < 0 THEN VMC = 0
+     END ELSE AMC = 0 ; VMC = 0
+     IF MODE = MODE.AMEND THEN
+*       Skip amend if data unchanged, or indexing on key!
+        IF AMC < 1 THEN RETURN
+        KEYLIST = ORIG.REC<AMC, VMC>
+        IF KEYLIST = RECORD<AMC, VMC> THEN RETURN
+     END
+     O.CONV = INDEX.DEFN<2, INDEX.NO>
+     APOS   = INDEX.DEFN<7, INDEX.NO>
+     IF O.CONV[1, 1] = '@' THEN
+        BASIC.FLG = TRUE
+        O.CONV = O.CONV[2, BIG.INT]
+     END ELSE BASIC.FLG = FALSE
+     UPCASE.FLG  = MOD(INT(APOS / 2), 2)
+     UNIQUE.FLG  = MOD(INT(APOS / 4), 2)
+     NONULLS.FLG = MOD(INT(APOS / 8), 2)
+     WORDIDX.FLG = MOD(INT(APOS / 16), 2)
+*
+     PFX = INDEX.NO:DOT         ;* Index node item-id 'prefix'
+     GOSUB 3000                 ;* Read 'root' and lock this index!
+     SSEQ = ROOT.DTA<1, 8>      ;* Indexed value insert sequence
+     KSEQ = ROOT.DTA<1, 9>      ;* key value insert sequence
+     MFLG = ROOT.DTA<1, 10>     ;* flag, true if MV/SMV info stored
+     NMAX = ROOT.DTA<1, 11>     ;* maximum node size (in bytes)
+*
+     BEGIN CASE
+        CASE MODE = MODE.INS    ;* Insert into index
+           IF AMC > 0 THEN
+              KEYLIST = RECORD<AMC, VMC>
+           END ELSE KEYLIST = KVAL
+           GOSUB 2000
+        CASE MODE = MODE.AMEND  ;* Amend index
+           GOSUB 2000           ;* Remove old entries!
+           MODE = MODE.INS
+           KEYLIST = RECORD<AMC, VMC>
+           GOSUB 2000           ;* Insert new entries!
+           MODE = MODE.AMEND    ;* Reset to original value
+        CASE MODE = MODE.DEL    ;* Delete from index
+           IF AMC > 0 THEN
+              KEYLIST = ORIG.REC<AMC, VMC>
+           END ELSE KEYLIST = KVAL
+           GOSUB 2000
+        CASE 1
+*          Error! - Invalid action code
+           ERRFLG = E.BAD.MODE
+     END CASE
+     RETURN
+*
+* ************************************************************ *
+* Insert or delete items in index. This function loops through *
+* the data defined in the index definition, and calls either   *
+* the insert or delete routine (depends on setting of 'MODE'). *
+* ************************************************************ *
+2000*
+     I.FLG = (MODE = MODE.INS)         ;* Set TRUE if inserting
+     MV.CTR = 1; I.KEY = KVAL
+     NO.VALS = COUNT(KEYLIST<1>, VM) + 1
+     LOOP
+        SMV.CTR = 1                    ;* Init counter for SMV loop
+        KEYVAL  = KEYLIST<1, MV.CTR>   ;* Get next MV level value
+        NO.SMVS = COUNT(KEYVAL, SVM) + 1
+        LOOP                        
+           I.STR = KEYVAL<1, 1, SMV.CTR>
+           IF O.CONV > '' THEN
+              IF BASIC.FLG THEN        ;* Call user subr to manipulate data?
+                 CALL @O.CONV(MODE, I.STR, ORIG.REC, RECORD, KVAL)
+              END ELSE I.STR = OCONV(I.STR, O.CONV)
+           END
+*          Convert to upper case if required!
+           IF UPCASE.FLG THEN I.STR = OCONV(I.STR, 'MCU')
+*          Word index? - extract words from data string
+           IF WORDIDX.FLG THEN
+              WORDLIST = TRIM(I.STR) ; WCNT = 1
+              NO.WORDS = COUNT(WORDLIST, SPCE) + 1
+              LOOP
+                 I.STR = FIELD(WORDLIST, SPCE, WCNT)
+                 IF I.FLG THEN GOSUB 5000 ELSE GOSUB 8000
+              WHILE WCNT < NO.WORDS AND NOT(ERRFLG) DO
+                 WCNT = WCNT + 1 ; I.KEY = KVAL
+                 GOSUB 3000
+              REPEAT
+           END ELSE
+              IF I.STR > '' OR NOT(NONULLS.FLG) THEN
+                 IF I.FLG THEN GOSUB 5000 ELSE GOSUB 8000
+              END ELSE RELEASE F.INDX, PFX:ROOT.ID
+           END
+        WHILE SMV.CTR < NO.SMVS AND NOT(ERRFLG) DO
+           SMV.CTR = SMV.CTR + 1 ; I.KEY = KVAL
+           GOSUB 3000
+        REPEAT
+     WHILE MV.CTR < NO.VALS AND NOT(ERRFLG) DO
+        MV.CTR = MV.CTR + 1 ; I.KEY = KVAL
+        GOSUB 3000
+     REPEAT
+     RETURN
+*
+* ***************************************************** *
+* Read and lock the index 'root' node. If tree is empty *
+* we build a new root item from passed index info.      *
+* ***************************************************** *
+3000*
+     T = ROOT.ID                  ;* Set 'T' (key for 'NODE') to root id!
+     LOOP                     
+        POS = FALSE               ;* Assume root node not locked!
+        READU NODE FROM F.INDX,PFX:T LOCKED
+           POS = TRUE             ;* Set root node 'locked' flag
+        END THEN
+           ROOT.DTA = NODE<3>     ;* Preserve root node 'data'
+        END ELSE
+*          Tree empty! - Build new root node.
+           SSEQ = INDEX.DEFN<4, INDEX.NO>
+           KSEQ = INDEX.DEFN<5, INDEX.NO>
+           IF SSEQ = '' THEN SSEQ = 'AL'
+           IF KSEQ = '' THEN KSEQ = 1
+           NMAX = INDEX.DEFN<6, INDEX.NO> 
+           IF NMAX < 100 THEN NMAX = NODE.SIZE
+           MFLG = MOD(INDEX.DEFN<7, INDEX.NO>, 2)
+           ROOT.DTA = 1:VM:0:VM:VM:VM:VM:T:VM:1:VM:SSEQ:VM:KSEQ:VM:MFLG:VM:NMAX
+           NODE = AM:AM:ROOT.DTA  ;* Define empty root node!
+        END
+     WHILE POS DO REPEAT          ;* Loop while root node locked
+     RETURN
+*
+* ************************************************* *
+* Scan tree to leaf level looking for 'I.STR'. Set  *
+* 'FOUND' to true if 'I.KEY' entry already exists.  *
+* If 'MODE' = insert, then 'FOUND' setting is       *
+* irrelevant, but the value if 'POS' is returned    *
+* as: 0 = do NOT insert, duplicate keys not allowed *
+*    >0 = ok to insert at this point                *
+* ************************************************* *
+4000*
+     FOUND = FALSE
+*    Locate starting point in root node!
+     LOCATE(I.STR, NODE, 1; POS; SSEQ) ELSE
+*       Allow for special case, where only 'string' in root node is a
+*       'null' (which means no data/delimiters in 'NODE<1>', and a search
+*       string of > 'null'. 'LOCATE()' output may need adjusting.
+        IF POS = 1 AND NODE<1> = '' AND NODE<3, 2> > 0 AND I.STR > '' THEN
+           LOCATE(I.STR, VM, 1; POS; SSEQ) ELSE IF POS # 1 THEN POS = 2
+        END
+     END
+*    Navigate down tree to leaf!
+     LOOP WHILE NODE<3, 1> = 0 DO
+        T = NODE<2, POS>
+        READ NODE FROM F.INDX, PFX:T ELSE
+           ERRFLG = E.IDX.CORRUPT ; RETURN
+        END
+        LOCATE(I.STR, NODE, 1; POS; SSEQ) ELSE NULL
+     REPEAT
+*
+*    Ok, we are at leaf level, so now determine insertion point
+*    (if MODE = insert), or look for 'I.KEY' entry for 'I.STR'
+*
+     BPOS = NODE<3, 2>
+     IF MODE = MODE.INS THEN
+        IF POS <= BPOS THEN
+           IF NODE<1, POS> = I.STR THEN
+              IF UNIQUE.FLG THEN
+*                Index value found, but 'unique flag' set - exit!
+                 POS = FALSE      ;* Set FALSE to indicate 'no insert'
+                 RETURN
+              END
+           END ELSE RETURN        ;* 'I.STR' not found, ready to insert
+        END ELSE RETURN           ;* No match on 'I.STR', ready to insert
+*       I.STR' found in node. If 'insert at front' - we can insert now.
+        IF KSEQ = 1 THEN RETURN
+*       If 'insert at end', find last occurrence of 'I.STR', then insert
+        IF KSEQ = (-1) THEN
+*          Find last occurrence of 'I.STR', and return 'POS' set to 1
+*          past this point. That is, setup for 'insert at end'!
+           LOOP
+              IF NODE<1, BPOS> = I.STR THEN
+                 TEMP.T = NODE<3, 4>
+              END ELSE TEMP.T = ''
+           WHILE TEMP.T > '' DO
+              T = TEMP.T ; POS = 0
+              READ NODE FROM F.INDX, PFX:T ELSE
+                 ERRFLG = E.IDX.CORRUPT ; RETURN
+              END
+              BPOS = NODE<3, 2>
+           REPEAT
+*          Try 1 or 2 'binary chops' to avoid excessive looping!
+           APOS = POS + INT((BPOS - POS) / 2)
+           IF NODE<1, APOS> = I.STR THEN
+              POS = APOS
+              IF BPOS - POS > 20 THEN
+                 APOS = POS + INT((BPOS - POS) / 2)
+                 IF NODE<1, APOS> = I.STR THEN POS = APOS
+              END
+           END
+           LOOP
+              POS = POS + 1 
+           WHILE NODE<1, POS> = I.STR AND POS <= BPOS DO REPEAT
+           RETURN
+        END
+     END ELSE
+*       If no match on 'I.STR' in node, then entry cannot exist, so exit!
+        IF POS > BPOS OR NODE<1, POS> # I.STR THEN RETURN
+     END
+*
+*    Search for key value 'I.KEY' - if found set 'FOUND' true, else
+*    return false, in which case 'POS' will be set at insertion point.
+*
+     IF POS > 1 THEN
+        APOS = INDEX(NODE<2>, VM, POS-1)
+        NEW.NODE = NODE<2>[APOS+1, BIG.INT]
+        IF KSEQ > 1 THEN
+           LOCATE(I.KEY, NEW.NODE, 1; TEMP.POS; KSEQ) ELSE NULL
+        END ELSE LOCATE(I.KEY, NEW.NODE, 1; TEMP.POS) ELSE NULL
+        POS = POS + TEMP.POS - 1  ;* Include original 'offset' position
+     END ELSE
+        IF KSEQ > 1 THEN
+           LOCATE(I.KEY, NODE, 2; POS; KSEQ) ELSE NULL
+        END ELSE LOCATE(I.KEY, NODE, 2; POS) ELSE NULL
+     END
+     LOOP
+        IF POS > BPOS AND NODE<1, BPOS> = I.STR THEN
+           TEMP.T = NODE<3, 4>
+        END ELSE TEMP.T = ''
+     WHILE TEMP.T > '' DO
+        T = TEMP.T
+        READ NODE FROM F.INDX, PFX:T ELSE
+           ERRFLG = E.IDX.CORRUPT ; RETURN
+        END
+        BPOS = NODE<3, 2>
+        IF KSEQ > 1 THEN
+           LOCATE(I.KEY, NODE, 2; POS; KSEQ) ELSE NULL
+        END ELSE LOCATE(I.KEY, NODE, 2; POS) ELSE NULL
+     REPEAT
+     IF POS > BPOS OR NODE<1, POS> # I.STR THEN
+        LOOP
+           POS = POS - 1
+        WHILE POS > 0 AND NODE<1, POS> # I.STR DO REPEAT
+        POS = POS + 1             ;* Plus 1 to position for insert
+     END ELSE
+        FOUND = (NODE<2, POS> = I.KEY)
+     END
+     RETURN
+*
+* ************************************************ *
+* INSERT string 'I.STR' and associated key 'I.KEY' *
+* into the index file. Note: The root node will be *
+* locked on entry to this function, but _will_ be  *
+* released on exit, _unless_ we exit with error.   *
+* ************************************************ *
+5000*
+     GOSUB 4000                   ;* Find insert point in tree
+     IF NOT(POS) THEN             ;* Exit if duplicates not allowed
+        RELEASE F.INDX, PFX:ROOT.ID
+        RETURN
+     END
+     RFLAG = FALSE                ;* Set true to update root
+     DONE  = FALSE
+     LOOP
+        BPOS = NODE<3, 2>
+        NODE<3, 2> = BPOS + 1     ;* Inc entries in node counter
+        IF POS >= BPOS THEN
+           IF I.STR = '' AND (POS > BPOS OR NODE<1, BPOS> = '') THEN
+              NODE<1> = NODE<1>:VM
+           END ELSE NODE = INSERT(NODE, 1, POS, 0, I.STR)
+           IF I.KEY = '' AND (POS > BPOS OR NODE<2, BPOS> = '') THEN
+              NODE<2> = NODE<2>:VM
+           END ELSE NODE = INSERT(NODE, 2, POS, 0, I.KEY)
+        END ELSE
+           NODE = INSERT(NODE, 1, POS, 0, I.STR)
+           NODE = INSERT(NODE, 2, POS, 0, I.KEY)
+        END
+        IF MFLG AND NODE<3, 1> = 1 THEN
+*          Store multi-value/sub-multi-value pointers
+           NODE = INSERT(NODE, 4, POS, 0, MV.CTR:SVM:SMV.CTR)
+        END
+        IF LEN(NODE) < NMAX OR BPOS < 3 THEN
+*          node is undersized, or too few entries to consider split!
+           WRITE NODE ON F.INDX, PFX:T
+           DONE = TRUE
+        END ELSE
+*          Attempt Redistribution of keys between sibling nodes
+           BPOS = BPOS + 1        ;* New number of entries in 'NODE'
+           GOSUB 7000             ;* Attempt redistribution!
+           IF ERRFLG THEN RETURN
+           IF DONE THEN
+*             Redistribution ok! - update amended parent node.
+              WRITE NODE ON F.INDX, PFX:T
+           END ELSE
+*             Split node into 2, pass split value up the tree
+              HALF = INT(BPOS / 2)       ;* Split point in node
+              NEW.T = ROOT.DTA<1, 6> + 1 ;* Generate next node item-id
+              APOS = INDEX(NODE<1>, VM, HALF)
+              BPOS = INDEX(NODE<2>, VM, HALF)
+              NEW.NODE = NODE<1>[1, APOS-1]:AM:NODE<2>[1, BPOS-1]:AM:NODE<3>
+              OLD.NODE = NODE<1>[APOS+1, BIG.INT]:AM:NODE<2>[BPOS+1, BIG.INT]:AM:NODE<3>
+              IF MFLG AND NODE<3, 1> = 1 THEN
+*                Split MV/SMV pointers if splitting a leaf node
+                 APOS = INDEX(NODE<4>, VM, HALF)
+                 NEW.NODE<4> = NODE<4>[1, APOS-1]
+                 OLD.NODE<4> = NODE<4>[APOS+1, BIG.INT]
+              END
+              NEW.NODE<3, 2> = HALF
+              OLD.NODE<3, 2> = NODE<3, 2> - HALF
+              I.STR = NEW.NODE<1, HALF>  ;* Index value we split on
+              IF PARENT.T > '' THEN      ;* Is there a parent node pointer?
+                 I.KEY = NEW.T           ;* Key to pass up tree = new node
+                 ROOT.DTA<1, 6> = NEW.T  ;* Update node counter in root
+                 NEW.NODE<3, 4> = T      ;* Right ptr to remains of old node
+                 OLD.NODE<3, 3> = NEW.T  ;* Set left pointer to the new node
+                 WRITE OLD.NODE ON F.INDX, PFX:T ;* Write split node
+                 IF NEW.NODE<3, 1> = 0 THEN      ;* Not a leaf node?
+                    GOSUB 6000                   ;* Adopt child nodes
+                    IF ERRFLG THEN RETURN
+                 END
+                 LEFT.T = NEW.NODE<3, 3>         ;* Node to left of new node
+                 IF LEFT.T > '' THEN
+                    READ TEMP.NODE FROM F.INDX, PFX:LEFT.T ELSE
+                       ERRFLG = E.IDX.CORRUPT ; RETURN
+                    END
+                    TEMP.NODE<3, 4> = NEW.T      ;* Update right node ptr
+                    WRITE TEMP.NODE ON F.INDX, PFX:LEFT.T
+                 END ELSE
+                    IF NEW.NODE<3, 1> = 1 THEN
+*                      We must have created a new 'leftmost' leaf node!
+                       ROOT.DTA<1, 3> = NEW.T    ;* Update leftmost pointer
+                    END
+                 END
+                 WRITE NEW.NODE ON F.INDX, PFX:NEW.T
+*                Determine insertion point in parent for 'promoted' key
+                 READ NODE FROM F.INDX, PFX:PARENT.T ELSE
+                    ERRFLG = E.IDX.CORRUPT ; RETURN
+                 END
+                 LOCATE(T, NODE, 2; POS) ELSE
+                    ERRFLG = E.IDX.CORRUPT ; RETURN
+                 END
+                 T = PARENT.T
+                 IF T = ROOT.ID THEN        ;* Is root being updated?
+                    NODE<3> = ROOT.DTA      ;* Yes, update root info now,
+                    RFLAG = FALSE           ;* so no need to do it later
+                 END ELSE RFLAG = TRUE      ;* No, update root info later
+              END ELSE
+*                No parent - need to create a new root node!
+                 T = NEW.T
+                 NEW.T = NEW.T + 1          ;* Inc node counter again
+                 ROOT.DTA<1, 6> = NEW.T     ;* Update node counter in root
+                 ROOT.DTA<1, 1> = 0         ;* Root cannot be a leaf now!
+                 ROOT.DTA<1, 2> = 1         ;* Only 1 entry in new root
+                 NEW.NODE<3, 5> = ROOT.ID   ;* Parent node is new root node
+                 OLD.NODE<3, 5> = ROOT.ID   ;* For both nodes made by split
+                 OLD.NODE<3, 4> = ''        ;* No right ptr in split node
+                 NEW.NODE<3, 3> = ''        ;* No left ptr in new node
+                 OLD.NODE<3, 3> = NEW.T     ;* Adjust left ptr in old node
+                 NEW.NODE<3, 4> = T         ;* Adjust right ptr in new node
+*                Strip root only data from attr 3 in both new nodes!
+                 NEW.NODE<3> = NEW.NODE<3>[1, INDEX(NEW.NODE<3>, VM, 5)-1]
+                 OLD.NODE<3> = OLD.NODE<3>[1, INDEX(OLD.NODE<3>, VM, 5)-1]
+*                Complete building new root, adopt child nodes as req'd
+                 NEW.ROOT = I.STR:AM:NEW.T:VM:T  ;* Start of new root
+                 IF NEW.NODE<3, 1> = 0 THEN      ;* Non leaf node ?
+                    GOSUB 6000                   ;* Adopt child nodes
+                    IF ERRFLG THEN RETURN
+                    WRITE NEW.NODE ON F.INDX, PFX:NEW.T
+                    NEW.NODE = OLD.NODE          ;* Re-assign node
+                    NEW.T    = T                 ;* and key
+                    GOSUB 6000                   ;* Adopt child nodes
+                    IF ERRFLG THEN RETURN
+                    WRITE NEW.NODE ON F.INDX, PFX:NEW.T
+                 END ELSE
+*                   Root node split for first time!
+                    ROOT.DTA<1, 3> = NEW.T       ;* leftmost node
+                    ROOT.DTA<1, 4> = T           ;* rightmost node
+                    WRITE NEW.NODE ON F.INDX, PFX:NEW.T
+                    WRITE OLD.NODE ON F.INDX, PFX:T
+                 END
+                 ROOT.DTA<1, 7> = ROOT.DTA<1, 7> + 1
+                 NEW.ROOT = NEW.ROOT:AM:ROOT.DTA
+*                Write the new root node, so tree now unlocked!
+                 WRITE NEW.ROOT ON F.INDX, PFX:ROOT.ID
+                 RETURN
+              END
+           END
+        END
+     UNTIL DONE DO REPEAT
+*    Update root if req'd - unlock tree.
+     IF RFLAG THEN
+        WRITEV ROOT.DTA ON F.INDX, PFX:ROOT.ID, 3
+     END ELSE RELEASE F.INDX, PFX:ROOT.ID
+     RETURN
+*
+* ************************************************************ *
+* Assign new parent node pointer to child nodes. For all child *
+* nodes in 'NEW.NODE', set the parent pointer to 'NEW.T'       *
+* ************************************************************ *
+6000*
+     APOS = 1
+     BPOS = NEW.NODE<2>                  
+     LOOP
+        TEMP.T = BPOS<1, APOS>           ;* Get next child pointer
+     WHILE TEMP.T > '' DO
+        TEMP.T = PFX:TEMP.T
+        READ TEMP.NODE FROM F.INDX, TEMP.T ELSE
+           ERRFLG = E.IDX.CORRUPT ; RETURN
+        END
+        APOS = APOS + 1
+        TEMP.NODE<3, 5> = NEW.T          ;* Update child with new parent
+        WRITE TEMP.NODE ON F.INDX, TEMP.T
+     REPEAT
+     RETURN
+*
+* ********************************************************************* *
+* Attempt to redistribute keys in 'NODE' with a sibling node (ie: same  *
+* parent). Check right side first, then if required, look left. If      *
+* successful, we must also update the parent node ('PARENT.T'), and set *
+* the flag 'DONE' to true. If called from deletion logic, we may also   *
+* combine 2 nodes into 1 if redistribution would not be applicable. In  *
+* this case, the right node grows by merging in the left node values.   *
+* The left node will then be deleted, and the parent updated to reflect *
+* this. 'DONE' is also be set to true if the combine action occurs. If  *
+* 'DONE' true on exit, 'NODE' and 'T' reflect the updated parent node.  *
+* ********************************************************************* *
+7000*
+     PARENT.T = NODE<3, 5>
+     IF PARENT.T = '' THEN
+        RETURN
+     END
+     RIGHT.T = NODE<3, 4>                ;* Look for node to right!
+     IF RIGHT.T > '' THEN
+        READ TEMP.NODE FROM F.INDX, PFX:RIGHT.T ELSE
+           ERRFLG = E.IDX.CORRUPT ; RETURN
+        END
+        IF TEMP.NODE<3, 5> = PARENT.T THEN
+           IF LEN(NODE) + LEN(TEMP.NODE) < NMAX + NMAX OR BPOS = 1 THEN
+              TEMP.NODE<1> = NODE<1>:VM:TEMP.NODE<1>
+              TEMP.NODE<2> = NODE<2>:VM:TEMP.NODE<2>
+              IF MFLG AND NODE<3, 1> = 1 THEN
+                 TEMP.NODE<4> = NODE<4>:VM:TEMP.NODE<4>
+              END
+              TEMP.NODE<3, 3> = NODE<3, 3>
+              DONE = TRUE ; LEFT.T = T
+              TEMP.POS = NODE<3, 2>
+              RIPPLE = FALSE             ;* Cancel 'ripple' (deletes only)
+           END
+        END
+     END
+     IF NOT(DONE) THEN
+        LEFT.T = NODE<3, 3>              ;* Look for node to left!
+        IF LEFT.T > '' THEN
+           READ TEMP.NODE FROM F.INDX, PFX:LEFT.T ELSE
+              ERRFLG = E.IDX.CORRUPT ; RETURN
+           END
+           IF TEMP.NODE<3, 5> = PARENT.T THEN
+              IF LEN(NODE) + LEN(TEMP.NODE) < NMAX + NMAX OR BPOS = 1 THEN
+                 TEMP.NODE<1> = TEMP.NODE<1>:VM:NODE<1>
+                 TEMP.NODE<2> = TEMP.NODE<2>:VM:NODE<2>
+                 IF MFLG AND NODE<3, 1> = 1 THEN
+                    TEMP.NODE<4> = TEMP.NODE<4>:VM:NODE<4>
+                 END
+                 TEMP.NODE<3, 4> = NODE<3, 4>
+                 DONE = TRUE ; RIGHT.T = T
+                 TEMP.POS = TEMP.NODE<3, 2>
+              END
+           END
+        END
+     END
+     IF DONE THEN
+        BPOS = NODE<3, 2> + TEMP.NODE<3, 2>
+        HALF = INT(BPOS / 2)
+*       Read parent node for our 2 siblings
+        READ NODE FROM F.INDX, PFX:PARENT.T ELSE
+           ERRFLG = E.IDX.CORRUPT ; RETURN
+        END
+        IF HALF > 1 AND LEN(TEMP.NODE) >= NMAX THEN
+*          split into 2 nodes, each with 2 or more entries
+           TEMP.NODE<3, 2> = BPOS - HALF
+           APOS = INDEX(TEMP.NODE<1>, VM, HALF)
+           BPOS = INDEX(TEMP.NODE<2>, VM, HALF)
+           NEW.NODE = TEMP.NODE<1>[1, APOS-1]:AM:TEMP.NODE<2>[1, BPOS-1]:AM:TEMP.NODE<3>
+           OLD.NODE = TEMP.NODE<1>[APOS+1, BIG.INT]:AM:TEMP.NODE<2>[BPOS+1, BIG.INT]:AM:TEMP.NODE<3>
+           IF MFLG AND TEMP.NODE<3, 1> = 1 THEN
+*             Split MV/SMV pointers if splitting a leaf node
+              APOS = INDEX(TEMP.NODE<4>, VM, HALF)
+              NEW.NODE<4> = TEMP.NODE<4>[1, APOS-1]
+              OLD.NODE<4> = TEMP.NODE<4>[APOS+1, BIG.INT]
+           END
+           NEW.NODE<3, 2> = HALF
+           OLD.NODE<3, 3> = LEFT.T
+           NEW.NODE<3, 4> = RIGHT.T
+           WRITE NEW.NODE ON F.INDX, PFX:LEFT.T
+           WRITE OLD.NODE ON F.INDX, PFX:RIGHT.T
+*          Update parent with 'split' value from amended left sibling
+           LOCATE(LEFT.T, NODE, 2; POS) ELSE
+              ERRFLG = E.IDX.CORRUPT ; RETURN
+           END
+           NODE<1, POS> = NEW.NODE<1, HALF>
+        END ELSE
+*          keep combined node, and delete left sibling node! - Note, we
+*          will only _ever_ get here if we are _deleting_ an index entry!
+           TEMP.NODE<3, 2> = BPOS        ;* Set entry count in new node
+           DELETE F.INDX, PFX:LEFT.T
+           WRITE TEMP.NODE ON F.INDX, PFX:RIGHT.T
+*          Update right pointer in node to left of deleted sibling
+           TEMP.T = TEMP.NODE<3, 3>
+           IF TEMP.T > '' THEN
+              READ NEW.NODE FROM F.INDX, PFX:TEMP.T ELSE
+                 ERRFLG = E.IDX.CORRUPT ; RETURN
+              END
+              NEW.NODE<3, 4> = RIGHT.T
+              WRITE NEW.NODE ON F.INDX, PFX:TEMP.T
+           END ELSE
+*             We may have a new 'leftmost' node
+              IF TEMP.NODE<3, 1> = 1 THEN
+                 ROOT.DTA<1, 3> = RIGHT.T
+                 RFLAG = TRUE
+              END
+           END
+*          Remove left pointer from parent, as that node has been deleted
+           LOCATE(LEFT.T, NODE, 2; POS) ELSE
+              ERRFLG = E.IDX.CORRUPT ; RETURN
+           END
+           NODE = DELETE(NODE, 1, POS, 0)
+           NODE = DELETE(NODE, 2, POS, 0)
+           NODE<3, 2> = NODE<3, 2> - 1
+           HALF = 0
+        END
+        IF TEMP.NODE<3, 1> = 0 THEN      ;* Non-leaf node?
+*          'Adopt' child nodes from other/deleted sibling!
+           BPOS = HALF - TEMP.POS
+           IF BPOS > 0 THEN
+*             Items added to node on left!
+              BPOS = TEMP.POS + BPOS ; APOS = TEMP.POS + 1 ; NEW.T = LEFT.T
+              OLD.NODE = TEMP.NODE<2>
+           END ELSE
+*             Items added to node on right!
+              BPOS = HALF + ABS(BPOS) ; APOS = HALF + 1 ; NEW.T = RIGHT.T
+              OLD.NODE = TEMP.NODE<2>
+           END
+           FOR TEMP.POS = APOS TO BPOS
+              TEMP.T = PFX:OLD.NODE<1, TEMP.POS>
+              READ TEMP.NODE FROM F.INDX, TEMP.T ELSE
+                 ERRFLG = E.IDX.CORRUPT ; RETURN
+              END
+              TEMP.NODE<3, 5> = NEW.T    ;* Set new parent node pointer!
+              WRITE TEMP.NODE ON F.INDX, TEMP.T
+           NEXT TEMP.POS
+        END
+        T = PARENT.T                     ;* Set 'T' to match 'NODE'
+     END
+     RETURN
+*
+* ************************************************* *
+* DELETE string 'I.STR' and associated key 'I.KEY'  *
+* from the index file. Note: The root node will be  *
+* locked on entry to this function, but _will_ be   *
+* released on exit, _unless_ we exit with an error. *
+* ************************************************* *
+8000*
+     GOSUB 4000                          ;* Find existing entry in tree
+     IF NOT(FOUND) THEN                  ;* No work to do if not found!
+        RELEASE F.INDX, PFX:ROOT.ID
+        RETURN
+     END
+*    First, delete entry from leaf
+     NODE = DELETE(NODE, 1, POS, 0)
+     NODE = DELETE(NODE, 2, POS, 0)
+     IF MFLG THEN NODE = DELETE(NODE, 4, POS, 0)
+     BPOS = NODE<3, 2> - 1
+     NODE<3, 2> = BPOS
+*    Now propagate changes back up the tree
+     RFLAG = FALSE
+     RIPPLE = (POS > BPOS)               ;* True if last entry deleted
+     IF RIPPLE THEN TEMP.STR = NODE<1, BPOS>
+     IF BPOS < 2 OR LEN(NODE) < NMAX / 2 THEN
+        LOOP
+           DONE = FALSE                  ;* Reset before redist/merge attempt
+           GOSUB 7000                    ;* Redistribute or merge!
+           IF ERRFLG THEN RETURN
+*          If rightmost entry in node deleted, update pointer in parent
+           IF DONE THEN
+              BPOS = NODE<3, 2>          ;* Entries in parent node
+              IF RIPPLE THEN
+                 LOCATE(RIGHT.T, NODE, 2; POS) ELSE
+                    ERRFLG = E.IDX.CORRUPT ; RETURN
+                 END
+                 IF POS <= BPOS THEN     ;* Ignore 'right tree edge'
+                    RIPPLE = (POS = BPOS)
+                    NODE<1, POS> = TEMP.STR
+                 END ELSE RIPPLE = FALSE
+              END
+           END
+        WHILE DONE AND (BPOS < 2 OR LEN(NODE) < NMAX / 2) DO REPEAT
+     END
+     IF BPOS > 0 THEN                    ;* Any keys left in this node?
+        IF T = ROOT.ID THEN              ;* Was root node updated last?
+           ROOT.DTA<1, 2> = BPOS
+           NODE<3> = ROOT.DTA
+           WRITE NODE ON F.INDX, PFX:T
+        END ELSE
+           PARENT.T = NODE<3, 5>
+           WRITE NODE ON F.INDX, PFX:T
+*          May need to update higher nodes with new string value!
+           LOOP WHILE RIPPLE AND PARENT.T > '' DO
+              READ NODE FROM F.INDX, PFX:PARENT.T ELSE
+                 ERRFLG = E.IDX.CORRUPT ; RETURN
+              END
+              BPOS = NODE<3, 2>
+              LOCATE(T, NODE, 2; POS) ELSE
+                 ERRFLG = E.IDX.CORRUPT ; RETURN
+              END
+              IF POS <= BPOS THEN
+                 T = PARENT.T
+                 PARENT.T = NODE<3, 5>
+                 RIPPLE = (POS = BPOS)
+                 NODE<1, POS> = TEMP.STR
+                 WRITE NODE ON F.INDX, PFX:T
+              END ELSE RIPPLE = FALSE
+           REPEAT
+           IF T # ROOT.ID THEN
+*             Update root info based on 'RFLAG', else just unlock tree
+              IF RFLAG THEN
+                 WRITEV ROOT.DTA ON F.INDX, PFX:ROOT.ID, 3
+              END ELSE RELEASE F.INDX, PFX:ROOT.ID
+           END
+        END
+     END ELSE
+        IF T = ROOT.ID THEN
+           IF NODE<2> > '' THEN
+*             New root node required!
+              TEMP.T = PFX:NODE<2>
+              READ NEW.NODE FROM F.INDX, TEMP.T ELSE
+                 ERRFLG = E.IDX.CORRUPT ; RETURN
+              END
+              DELETE F.INDX, TEMP.T
+              ROOT.DTA<1, 1> = NEW.NODE<3, 1>
+              ROOT.DTA<1, 2> = NEW.NODE<3, 2>
+              ROOT.DTA<1, 7> = ROOT.DTA<1, 7> - 1
+              IF ROOT.DTA<1, 1> = 0 THEN
+*                Adopt child nodes if new root is not a leaf
+                 NEW.T = T
+                 GOSUB 6000
+              END ELSE
+*                New root is a leaf, so remove left/rightmost info
+                 ROOT.DTA<1, 3> = ''
+                 ROOT.DTA<1, 4> = ''
+              END
+              NEW.NODE<3> = ROOT.DTA
+              WRITE NEW.NODE ON F.INDX, PFX:T
+           END ELSE
+*             Tree now empty! - delete root node.
+              DELETE F.INDX, PFX:T
+           END
+        END ELSE ERRFLG = E.IDX.CORRUPT
+     END
+     RETURN
+*
+     END
