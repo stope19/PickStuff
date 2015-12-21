@@ -1,0 +1,656 @@
+$BASICTYPE 'P'
+PROGRAM TLOADR83
+* ***************************************************************** *
+* ***************************************************************** *
+* UniData function to 'load' non object code items from Pick R83    *
+* 'T-DUMP' format floppy disk media.                (dmm  8/97)     *
+*                                                                   *
+* DESCRIPTION:   Assuming user has attached a tape device prior to  *
+*                invoking this function, perform a 'T-LOAD' type    *
+*                operation on media created using R83 'T-DUMP'.     *
+*                                                                   *
+* SYNTAX:        TLOADR83 [ DICT | DATA ] filename -options         *
+*                                                                   *
+* OPTIONS:   O - Overwrite existing items.                          *
+*            S - Standard density media. High density assumed       *
+*            A - Antique media (that is, 5 1/4 inch floppy drive)   *
+*                By default, 3 1/2 floppy media is assumed.         *
+*            F - Force media blocksize to be set at 512 bytes       *
+*            L - List items on media. No update is performed, and   *
+*                so no filename reference is required.              *
+*            D - If file to load is NOT first on media, use the 'D' *
+*                option followed by a number to indicate which file *
+*                to load (eg: D3). No spaces between 'D' and number.*
+*            V - Verbose mode. Display item info as read from       *
+*                media.                                             *
+*                                                                   *
+* NOTES:    -  If DICT or DATA not specified then DATA assumed.     *
+*           -  R83 object code items are NOT loaded.                *
+*           -  Media other than floppy disks is not supported.      *
+*           -  Reserve option letters E and G (ie: don't use them)  *
+*              as these are reserved as UniData runtime options.    *
+* ***************************************************************** *
+* ***************************************************************** *
+   *
+   EQU TRUE TO 1, FALSE TO 0, SPCE TO CHAR(32)
+   *
+   * Define delimiter tokens as will exist on R83! Do not use
+   * @AM, @VM ..etc as UniData _may_ be configured differently.
+   *
+   EQU T.SM TO CHAR(255), T.AM TO CHAR(254), T.VM TO CHAR(253)
+   EQU T.SVM TO CHAR(252), T.SB TO CHAR(251)
+   *
+   EQU SECSIZE  TO  512         ;* Floppy media sector size
+   EQU DEFSTART TO   13         ;* First data byte for 500 byte R83 blocks!
+   EQU ITEMSIZE TO 1000         ;* Item buffer size (small for speed?)
+   EQU DISPSIZE TO   20         ;* Lines to display per page (if 'VFLG')
+   EQU FIDSIZE  TO  500         ;* R83 data frame size (in bytes)
+   *
+   * Extract parameters from command line!
+   *
+   PROMPT ""
+   *
+   LCNT = 0           
+   CMDLINE = @SENTENCE
+   Z = INDEX(CMDLINE, SPCE, 1)
+   IF Z > 0 THEN
+      LOOP Z = Z + 1 WHILE CMDLINE[Z, 1] = SPCE DO REPEAT
+      CMDLINE = CMDLINE[Z, LEN(CMDLINE)]
+   END ELSE CMDLINE = ''
+   IF CMDLINE = '' THEN
+      CRT
+      CRT "  Usage    : TLOADR83 [ DICT | DATA ] filename -options"
+      CRT
+      CRT "  filename : Name of target file. May be prefixed by DICT or DATA"
+      CRT "             modifiers. No filename required if 'L' option asserted."
+      CRT
+      CRT "  options  : O - Overwrite existing items."
+      CRT "             S - Standard density media. High density assumed"
+      CRT "             A - Antique media (that is, 5 1/4 inch floppy drive)"
+      CRT "                 By default, 3 1/2 inch floppy media is assumed."
+      CRT "             F - Force media blocksize to be set at 512 bytes."
+      CRT "             L - List items on media. No update is performed, and"
+      CRT "                 so no filename reference is required."
+      CRT "             D - If file to load is NOT first on media, use the 'D'"
+      CRT "                 option followed by a number to indicate which file"
+      CRT "                 to load (eg: D3). No spaces between 'D' and number."
+      CRT "             V - Verbose mode. Display item info as read from"
+      CRT "                 media."
+      STOP
+   END
+   *
+   * Extract and validate file name!
+   *
+   FNAME = FIELD(CMDLINE, SPCE, 1)
+   IF FNAME[1, 1] = '-' THEN
+      FNAME = ''
+   END ELSE
+      DFLG = ''
+      IF FNAME = 'DICT' OR FNAME = 'DATA' THEN
+         IF FNAME = 'DICT' THEN DFLG = FNAME
+         Z = COL2()             ;* Find next non-space!
+         LOOP Z = Z + 1 WHILE CMDLINE[Z, 1] = SPCE DO REPEAT
+         CMDLINE = CMDLINE[Z, LEN(CMDLINE)]
+         FNAME = FIELD(CMDLINE, SPCE, 1)
+      END
+      OPEN DFLG, FNAME TO F.FILE ELSE
+         IF DFLG > '' THEN FNAME = DFLG:SPCE:FNAME
+         CRT "Cannot open '":FNAME:"'"
+         STOP
+      END
+      Z = COL2()                ;* Find next non-space!
+      LOOP Z = Z + 1 WHILE CMDLINE[Z, 1] = SPCE DO REPEAT
+      CMDLINE = CMDLINE[Z, LEN(CMDLINE)]
+   END
+   *
+   * Get any options!
+   *
+   OPTIONS = '' ; FSKIP = ''
+   IF CMDLINE[1, 1] = '-' THEN
+      * Look for options defined in command line!
+      I = 2
+      LOOP
+         CH = OCONV(CMDLINE[I, 1], 'MCU')
+         I = I + 1
+         * NB: we allow 'E' & 'G' for UniBasic debugging of this code!!
+         LOOP WHILE CH > '' AND INDEX('OSAFLDVEG', CH, 1) DO
+            OPTIONS = OPTIONS:CH
+            IF CH = 'D' THEN
+               * Look for number that follows the 'D'
+               LOOP
+                  CH = OCONV(CMDLINE[I, 1], 'MCU')
+                  I = I + 1
+               WHILE CH MATCHES "1N" DO
+                  FSKIP = FSKIP:CH
+               REPEAT
+            END ELSE
+               CH = OCONV(CMDLINE[I, 1], 'MCU')
+               I = I + 1
+            END
+         REPEAT
+         IF CH > '' AND CH # SPCE THEN
+            CRT "'":CH:"' is an invalid option character!"
+            STOP
+         END
+         LOOP WHILE CMDLINE[I, 1] = SPCE DO I = I + 1 REPEAT
+      WHILE CMDLINE[I, 1] = '-' DO
+         I = I + 1
+      REPEAT
+      CMDLINE = CMDLINE[I, LEN(CMDLINE)]
+   END
+   IF CMDLINE > '' THEN
+      CRT 'Invalid command line option format!'
+      STOP
+   END
+   OFLAG = (INDEX(OPTIONS, 'O', 1))
+   SFLAG = (INDEX(OPTIONS, 'S', 1))
+   AFLAG = (INDEX(OPTIONS, 'A', 1))
+   FFLAG = (INDEX(OPTIONS, 'F', 1))
+   LFLAG = (INDEX(OPTIONS, 'L', 1))
+   DFLAG = (INDEX(OPTIONS, 'D', 1))
+   VFLAG = (INDEX(OPTIONS, 'V', 1))
+   *
+   IF DFLAG THEN
+      * Validate 'number of files to skip'
+      FSKIP = FSKIP + 0
+      IF FSKIP = 0 THEN
+         DFLAG = FALSE
+      END ELSE
+         IF NOT(FSKIP MATCHES "1N0N") THEN
+            CRT "Invalid number follows the 'D' option letter!"
+            STOP
+         END
+         CRT FSKIP:' files will be skipped!'
+         LCNT = LCNT + 1
+      END
+   END
+   IF LFLAG THEN
+      IF FNAME > "" THEN
+         CRT "Filename ignored when 'L' option asserted!"
+         LCNT = LCNT + 1
+         FNAME = ''
+      END
+   END ELSE
+      IF FNAME = '' THEN
+         CRT "Target filename must be specified!"
+         STOP
+      END
+   END
+   *
+   IF AFLAG THEN
+      * Source is 5 1/4" media!
+      IF SFLAG THEN
+         MAXTRACKS  = 40
+         MAXSECTORS = 9
+      END ELSE
+         MAXTRACKS  = 80
+         MAXSECTORS = 15
+      END
+   END ELSE
+      * Assume source is 3 1/2" media!
+      IF SFLAG THEN
+         MAXTRACKS  = 80
+         MAXSECTORS = 9
+      END ELSE
+         MAXTRACKS  = 80
+         MAXSECTORS = 18
+      END
+   END
+   *
+   * Determine how many 'logical sectors' exist on the media. We use
+   * this number to work out when we hit the end of a disk. Seems to
+   * be safer than relying on any status codes returned from 'TREAD'.
+   * Note also that we assume the media is 'doubled sided'.
+   *
+   LAST.LOGICAL.SECTOR = MAXSECTORS * 2 * MAXTRACKS
+   *
+   IF VFLAG THEN
+      CRT
+      CRT "Media characteristics:"
+      CRT "Heads 2, Tracks ":MAXTRACKS:", Sectors ":MAXSECTORS
+      CRT "Last 'logical' sector on disk is ":LAST.LOGICAL.SECTOR
+      LCNT = LCNT + 4
+   END
+   *
+   * We now have all info from the command line, and can proceed
+   * with the 'T-LOAD' operation!
+   *
+   CURR.LOGICAL.SECTOR = 1      ;* Reset current sector counter
+   REWIND ELSE                  ;* Ensure at start of media!
+      CRT 'Cannot rewind media! - Drive not ready?'
+      ERC = TRUE
+      RETURN
+   END
+   GOSUB 2000                   ;* Do first read, look for media label!
+   IF ERC THEN STOP             ;* Quit on any error!
+   *
+   CURR.REELNO = 1              ;* Always assume we start on disk #1
+   IF LABELED THEN
+      IF BLKSIZE = SECSIZE OR FFLAG THEN
+         OFFSET = 1
+      END ELSE
+         OFFSET = DEFSTART
+      END
+      * Ensure we are on the correct reel number!
+      IF NOT(REELNO = 1 OR REELNO = 0) THEN
+         CRT 'Incorrect media volume! Expected disk 1, this is disk ':REELNO
+         STOP
+      END
+      LABELED.MEDIA = TRUE
+   END ELSE
+      LABELED.MEDIA = FALSE
+      IF FFLAG THEN
+         OFFSET = 1
+      END ELSE
+         OFFSET = DEFSTART
+      END
+   END
+   *
+   * Ready to do the 'tload' itself!
+   *
+   RCNT = 0                     ;* Count of items READ from media
+   WCNT = 0                     ;* Count of items WRITTEN to disk
+   PTR  = OFFSET                ;* Pointer into disk sector buffer
+   EOF  = FALSE                 ;* End of tload found on media flag
+   REC  = STR(SPCE, ITEMSIZE)   ;* Allocate space for item body 'buffer'
+   LOOP
+      LOOP
+         IF PTR > SECSIZE THEN
+            PTR = OFFSET
+            GOSUB 1000
+            IF ERC THEN STOP
+         END
+         BYTE = BUFF[PTR, 1]
+         PTR = PTR + 1
+      WHILE BYTE = T.SB DO REPEAT
+      EOF = (BYTE = T.SM)
+      IF NOT(EOF) THEN
+         PFLG = FALSE
+         IF BYTE = T.VM THEN
+            PFLG = TRUE         ;* Pointer file item found!
+            IF PTR > SECSIZE THEN
+               PTR = OFFSET
+               GOSUB 1000
+               IF ERC THEN STOP
+            END
+            BYTE = BUFF[PTR, 1]
+            PTR = PTR + 1
+         END
+         *
+         * Get the rest of the item-id!
+         *
+         ID = ''
+         LOOP
+            ID = ID:BYTE
+            IF PTR > SECSIZE THEN
+               PTR = OFFSET
+               GOSUB 1000
+               IF ERC THEN STOP
+            END
+            BYTE = BUFF[PTR, 1]
+            PTR = PTR + 1
+         UNTIL BYTE = T.SM OR BYTE = T.AM OR BYTE = T.SB DO REPEAT
+         EOF = (BYTE = T.SM)
+         IF NOT(EOF) THEN
+            RCNT = RCNT + 1     ;* Increment items read counter!
+            IF ID[1, 1] = T.AM THEN
+               SKIPITEM = TRUE
+               IF NOT(DFLAG) THEN
+                  LCNT = LCNT + 1
+                  CRT "Null item-id detected. Item skipped!"
+               END
+            END ELSE
+               IF DFLAG THEN
+                  * We are skipping this file!
+                  IF VFLAG THEN
+                     CRT ID:'  skipped ..'
+                     LCNT = LCNT + 1
+                  END
+                  SKIPITEM = TRUE
+               END ELSE
+                  CRT RCNT "R#5  ":ID
+                  LCNT = LCNT + 1
+                  SKIPITEM = FALSE
+                  IF NOT(OFLAG OR LFLAG) THEN
+                     * Test if item already exists!
+                     READV REC FROM F.FILE, ID,1 THEN
+                        * Item exists, don't write it to file!
+                        CRT "'":ID:"' exists on file! - Not updated."
+                        LCNT = LCNT + 1
+                        SKIPITEM = TRUE
+                     END
+                  END
+               END
+            END
+            *
+            * Now pick up the item body! Note that rather than
+            * building up a single (maybe very large) string, we
+            * use a smaller buffer of size 'ITEMSIZE' when when
+            * full, is added to the larger item buffer.
+            *
+            IPTR   = 0
+            RECORD = ''
+            IF BYTE # T.SB THEN
+               EOI = FALSE
+               LOOP
+                  LAST.BYTE = BYTE
+                  IF PTR > SECSIZE THEN
+                     PTR = OFFSET
+                     GOSUB 1000
+                     IF ERC THEN STOP
+                  END
+                  BYTE = BUFF[PTR, 1]
+                  PTR = PTR + 1
+                  IF BYTE # T.SM THEN
+                     IF BYTE = T.SB THEN
+                        IF LAST.BYTE # T.SM THEN
+                           *
+                           * End of item detected. If this is a list
+                           * item ('PFLG' true), then we have found
+                           * the end of the list 'header'. As this is
+                           * not very large, we can expect the entire
+                           * header to exist within 'REC'.
+                           *
+                           IF PFLG THEN
+                              *
+                              * Pointer file header has been detected.
+                              * We check this to ensure it is valid,
+                              * and if so we read the pointer file
+                              * item itself. Note that we do NOT try
+                              * to load R83 object code! (who needs it?)
+                              *
+                              IF REC[1, 2] # 'CL' AND REC[1, 2] # 'CC' THEN
+                                 IF NOT(SKIPITEM) THEN
+                                    CRT "'":ID:"' bad pointer file item! - Skipped."
+                                    LCNT = LCNT + 1
+                                    SKIPITEM = TRUE
+                                 END
+                              END ELSE
+                                 * Assume valid pointer-file item
+                                 * header. Get no. of 'frames' in
+                                 * item. (R83 data frame = 500 chrs)
+                                 FBLK = REC<3>
+                                 IF NOT(FBLK MATCHES "1N0N") THEN
+                                    * Invalid list format?
+                                    IF NOT(SKIPITEM) THEN
+                                       CRT "'":ID:"' bad pointer file item! - Skipped."
+                                       LCNT = LCNT + 1
+                                    END
+                                    SKIPITEM = TRUE
+                                 END ELSE
+                                    IF REC[2, 1] = 'C' THEN
+                                       * Skip object code items!
+                                       IF NOT(SKIPITEM) THEN
+                                          CRT "'":ID:"' is object code - Skipped"
+                                          SKIPITEM = TRUE
+                                       END
+                                    END
+                                    * Extract the list item!
+                                    IPTR = 0
+                                    FOR I = 1 TO FBLK
+                                       FOR BP = 1 TO FIDSIZE
+                                          IF PTR > SECSIZE THEN
+                                             PTR = OFFSET
+                                             GOSUB 1000
+                                             IF ERC THEN STOP
+                                          END
+                                          IF IPTR = ITEMSIZE THEN
+                                             RECORD = RECORD:REC
+                                             IPTR = 0
+                                          END
+                                          IPTR = IPTR + 1
+                                          REC[IPTR, 1] = BUFF[PTR, 1]
+                                          PTR = PTR + 1
+                                       NEXT BP
+                                    NEXT FBLK
+                                 END
+                              END
+                           END
+                           EOI = TRUE         ;* Set end-of-item flag!
+                        END
+                     END ELSE
+                        *
+                        * Have found a 'valid' byte. Add to our small
+                        * output buffer. If that is full, add that to
+                        * the 'RECORD' variable, and reset 'IPTR' to 0
+                        *
+                        IF NOT(LFLAG) OR PFLG THEN
+                           IPTR = IPTR + 1
+                           REC[IPTR, 1] = BYTE
+                           IF IPTR = ITEMSIZE THEN
+                              RECORD = RECORD:REC
+                              IPTR = 0
+                           END
+                        END
+                     END
+                  END
+               UNTIL EOI DO REPEAT
+            END
+            *
+            * Finish off building 'RECORD' and write (if required)
+            *
+            IF NOT(LFLAG OR SKIPITEM) THEN
+               IF IPTR > 0 THEN
+                  RECORD = RECORD:REC[1, IPTR]
+               END
+               IF PFLG THEN
+                  * If pointer file item, look for a ^_ (AM followed
+                  * by SM) to indicate end of item. This should exist,
+                  * as will not end up here with any object code.
+                  IF RECORD[1, 1] = T.SM THEN
+                     RECORD = ''
+                  END ELSE
+                     Z = INDEX(RECORD, T.AM:T.SM, 1)
+                     IF Z > 0 THEN RECORD = RECORD[1, Z-1]
+                  END
+               END ELSE
+                  * For non-pointer file items, strip any trailing AM
+                  IF RECORD[LEN(RECORD), 1] = T.AM THEN
+                     RECORD = RECORD[1, LEN(RECORD)-1]
+                  END
+               END
+               * Do the actual write to disk, and increment the
+               * 'items written' counter in 'WCNT'.
+               WRITE RECORD ON F.FILE, ID
+               WCNT = WCNT + 1
+            END
+         END
+      END
+      IF EOF THEN
+         IF DFLAG THEN
+            PTR = OFFSET
+            GOSUB 1000             ;* Skip the SB filled sector
+            GOSUB 1000             ;* then also the 'EOF' sector
+            GOSUB 2000             ;* Ok, get first sector of next file!
+            IF LABELED THEN
+               IF BLKSIZE = SECSIZE OR FFLAG THEN
+                  OFFSET = 1
+               END ELSE
+                  OFFSET = DEFSTART
+               END
+               LABELED.MEDIA = TRUE
+            END ELSE
+               LABELED.MEDIA = FALSE
+               IF FFLAG THEN
+                  OFFSET = 1
+               END ELSE
+                  OFFSET = DEFSTART
+               END
+            END
+            FSKIP = FSKIP - 1
+            IF FSKIP = 0 THEN
+               * Ok, we are now positioned at the end of the
+               * file that preceeds the one we want to load!
+               DFLAG = FALSE
+               RCNT = 0            ;* Reset 'items read' count!
+            END
+            EOF = FALSE
+         END
+      END
+   UNTIL EOF DO REPEAT
+   CRT
+   CRT RCNT:' item(s) read from media.'
+   IF NOT(LFLAG) THEN
+      CRT WCNT:' item(s) written to file.'
+   END
+   CRT
+   STOP
+*
+* ***************************************************** *
+* Read a block from disk media. If passed 'end-of-disk' *
+* then prompt for then next media volumne. Return an    *
+* error flag 'ERC' as false if read ok, else true for   *
+* any error.                                            *
+* ***************************************************** *
+1000*
+   IF CURR.LOGICAL.SECTOR > LAST.LOGICAL.SECTOR THEN
+      * We are attempting a read past the end of disk.
+      * Prompt user for the next media volume!
+      LOOP
+         LCNT = LCNT + 2
+         CRT
+         CRT "Load diskette number ":CURR.REELNO+1:" - Press 'C' to continue:":
+         INPUT REPLY, 1
+         CRT
+         CH = OCONV(REPLY, 'MCU')
+         IF CH = 'Q' THEN
+            * User wants to quit!
+            ERC = TRUE
+            RETURN
+         END
+         *
+         CURR.LOGICAL.SECTOR = 1   ;* Reset current sector counter
+         REWIND THEN               ;* Ensure at start of media!
+            *
+            GOSUB 2000             ;* Read first disk sector, look for label!
+            IF ERC THEN RETURN     ;* Exit on any error!
+            *
+            IF CH # 'O' THEN
+               IF LABELED THEN
+                  IF NOT(LABELED.MEDIA) THEN
+                     CRT "This media volume is 'labeled' - original was not!"
+                     ERC = TRUE
+                  END
+                  IF REELNO = 0 OR REELNO = CURR.REELNO+1 THEN
+                     * Correct media volume has been detected!
+                     CURR.REELNO = CURR.REELNO + 1
+                  END ELSE
+                     CRT "This is disk number ":REELNO:" - Expected disk ":
+                     CRT CURR.REELNO+1
+                     ERC = TRUE
+                  END
+               END ELSE
+                  IF MEDIA.LABELED THEN
+                     CRT "This disk volume is 'unlabeled' - original was!"
+                     ERC = TRUE
+                  END
+               END
+            END
+         END ELSE
+            CRT 'Cannot rewind media! - Drive not ready?'
+            ERC = TRUE
+         END
+      WHILE (ERC) DO REPEAT
+   END
+   * Read a block of data from the diskette!
+   NOCONVERT ON
+   READT BUFF THEN
+      ERC = FALSE
+      IF VFLAG THEN GOSUB 3000
+      CURR.LOGICAL.SECTOR = CURR.LOGICAL.SECTOR + 1
+   END ELSE
+      CRT "Cannot read from floppy drive - disk not ready?"
+      ERC = TRUE
+   END
+   NOCONVERT OFF
+   RETURN
+*
+* ************************************************************* *
+* Do the first read on a diskette. Look for a label and extract *
+* info from it. Set 'LABELED' true if found, else false.        *
+* Return 'ERC' as an error code. If ok return false, else true. *
+* Also, if 'LABELED' returned true, return block size from the  *
+* label in 'BLKSIZE' (0 if invalid) and the volume number in    *
+* 'REELNO' (0 if invalid). Note that Pick R83 only allows block *
+* sizes of 500 and 512 for floppy disk media!                   *
+* ************************************************************* *
+2000*
+   GOSUB 1000                   ;* Read first block from media
+   IF ERC THEN RETURN           ;* Return if any read error!
+   LABELED = FALSE              ;* Assume unlabeled media
+   *
+   * Look for a label in this data block. R83 labels will start
+   * at character 13, and are 80 bytes long. Format is:
+   * _L xxxx HH:MM:SS  DD MMM YYYY (47 chars of text) ^nn
+   * Where: _ = SM, ^ = AM, xxxx = hex blk size, nn = reel number.
+   *
+   IF BUFF[DEFSTART, 3] = T.SM:'L ' THEN
+      LABELED = TRUE
+      BLKSIZE = OCONV(BUFF[DEFSTART+3, 4], 'MCXD')
+      IF NOT(BLKSIZE = 500 OR BLKSIZE = 512) THEN
+         * Invalid block size value in label? Set to default value.
+         BLKSIZE = 500
+      END
+      REELNO = BUFF[DEFSTART+78, 2]
+      IF REELNO MATCHES "2N" THEN
+         REELNO = REELNO + 0
+      END ELSE
+         * Invalid reel number value in label?
+         REELNO = 0
+      END
+      * Display any label to user if 'VFLAG' set!
+      CRT
+      CRT 'Label found - media block size = ':BLKSIZE:'  volume number = ':
+      CRT REELNO
+      CRT BUFF[DEFSTART+1, 79]
+      CRT
+      LCNT = LCNT + 4
+      *
+      * Now read the first data sector!
+      *
+      GOSUB 1000
+   END
+   RETURN
+*
+* ******************************************************** *
+* 'VFLAG' option only. We come here to display the current *
+* sector from diskette to the user. Useful for debugging.  *
+* ******************************************************** *
+3000*
+   LCNT = LCNT + 3
+   CRT
+   CRT "Logical Sector: ":CURR.LOGICAL.SECTOR
+   CRT
+   FOR I = 1 TO SECSIZE STEP 16
+      IF LCNT > DISPSIZE THEN
+         CRT 'Press any key to continue:':
+         INPUT REPLY, 1
+         IF OCONV(REPLY, 'MCU') = 'Q' THEN
+            * Abort everything!
+            ERC = TRUE
+            RETURN
+         END
+         LCNT = 0
+      END
+      ASC = "    :"
+      CRT (I) "R%3: ":
+      FOR J = 0 TO 15
+         CH = SEQ(BUFF[I + J, 1])
+         CRT OCONV(CH, "MCDX") "R%2 ":
+         BEGIN CASE
+            CASE CH < 32  ; ASC = ASC:'.'
+            CASE CH < 128 ; ASC = ASC:CHAR(CH)
+            CASE 1
+               IF CH > 250 THEN
+                  ASC = ASC:CHAR(CH - 160)
+               END ELSE
+                  ASC = ASC:'.'
+               END
+         END CASE
+      NEXT J
+      CRT ASC
+      LCNT = LCNT + 1
+   NEXT I
+   RETURN
+*
+   END
