@@ -1,0 +1,203 @@
+     SUBROUTINE BASE64(MODE, INBUF, OUTBUF, ERR)
+* ********************************************************** *
+* ********************************************************** *
+* This function provides for encoding and decoding data in   *
+* MIME base64 format. Line breaks in the output are          *
+* represented as CR LF (codes 13 and 10).                    *
+*                                                            *
+* Passed:    MODE  - 0 = encode string in 'INBUF'            *
+*                    1 = decode string in 'INBUF'            *
+*           INBUF  - string on which the operation is to be  *
+*                    performed.                              *
+*                                                            *
+* Retuned: OUTBUF  - string that represents the result of    *
+*                    the requested operation.                *
+*             ERR  - error flag. Can return one of:          *
+*                    0 = no error detected.                  *
+*                    1 = error during encode (length calc.?) *
+*                    2 = error on decode, input length not   *
+*                        multiple of 4                       *
+*                    3 = error on decode, bad char in input. *
+*                                                            *
+* Reference: RFC 2045, Multipurpose Internet Mail Extensions *
+* (MIME) Part One, Format of Internet Message Bodies,        *
+* "Section 6.8 Base64 Content-Transfer-Encoding" at URL      *
+* http://www.imc.org/rfc2045                           (dmm) *
+* ********************************************************** *
+* ********************************************************** *
+     *
+     EQU TRUE TO 1, FALSE TO 0, CR TO CHAR(13), LF TO CHAR(10)
+     *
+     EQU ERR.BAD.ENC  TO 1    ;* Error encoding string.
+     EQU ERR.BAD.LGT  TO 2    ;* Input for decode wrong length.
+     EQU ERR.BAD.CHR  TO 3    ;* Bad character in input on decode.
+     *
+     * This is the maximum number of input bytes represented on each line
+     * (not the number of output characters).
+     *
+     EQU LINEBREAK.LENGTH TO 48
+     *
+     ERR = FALSE              ;* Assume no error
+     OUTBUF = ""              ;* Clear var to hold return value
+     BLEN = LEN(INBUF)        ;* Length of input string
+     IF MODE = 0 THEN
+        GOSUB 1000            ;* Encode
+     END ELSE
+        GOSUB 2000            ;* Decode
+     END
+     RETURN
+     *
+* ********************************************************** *
+* This function provides for encoding and decoding data in   *
+* MIME base64 format. 'A'-'Z', 'a'-'z', '0'-'9', '+', '/',   *
+* and '=' in the output are mapped to their ASCII code       *
+* points. Line breaks in the output are represented as CR LF *
+* (codes 13 and 10).                                         *
+* ********************************************************** *
+1000*
+     * Define an array that maps 6-bit integers to a specific char.
+     *
+     DIM ETAB(64)             ;* Encoding table!
+     *
+     ETAB(1)  = 'A'; ETAB(2)  = 'B'; ETAB(3)  = 'C'; ETAB(4)  = 'D'
+     ETAB(5)  = 'E'; ETAB(6)  = 'F'; ETAB(7)  = 'G'; ETAB(8)  = 'H'
+     ETAB(9)  = 'I'; ETAB(10) = 'J'; ETAB(11) = 'K'; ETAB(12) = 'L'
+     ETAB(13) = 'M'; ETAB(14) = 'N'; ETAB(15) = 'O'; ETAB(16) = 'P'
+     ETAB(17) = 'Q'; ETAB(18) = 'R'; ETAB(19) = 'S'; ETAB(20) = 'T'
+     ETAB(21) = 'U'; ETAB(22) = 'V'; ETAB(23) = 'W'; ETAB(24) = 'X'
+     ETAB(25) = 'Y'; ETAB(26) = 'Z'; ETAB(27) = 'a'; ETAB(28) = 'b'
+     ETAB(29) = 'c'; ETAB(30) = 'd'; ETAB(31) = 'e'; ETAB(32) = 'f'
+     ETAB(33) = 'g'; ETAB(34) = 'h'; ETAB(35) = 'i'; ETAB(36) = 'j'
+     ETAB(37) = 'k'; ETAB(38) = 'l'; ETAB(39) = 'm'; ETAB(40) = 'n'
+     ETAB(41) = 'o'; ETAB(42) = 'p'; ETAB(43) = 'q'; ETAB(44) = 'r'
+     ETAB(45) = 's'; ETAB(46) = 't'; ETAB(47) = 'u'; ETAB(48) = 'v'
+     ETAB(49) = 'w'; ETAB(50) = 'x'; ETAB(51) = 'y'; ETAB(52) = 'z'
+     ETAB(53) = '0'; ETAB(54) = '1'; ETAB(55) = '2'; ETAB(56) = '3'
+     ETAB(57) = '4'; ETAB(58) = '5'; ETAB(59) = '6'; ETAB(60) = '7'
+     ETAB(61) = '8'; ETAB(62) = '9'; ETAB(63) = '+'; ETAB(64) = '/'
+     *
+     DELTA = MOD(BLEN, 3)
+     OLEN = INT((BLEN + LINEBREAK.LENGTH-1) / LINEBREAK.LENGTH) * 2
+     OLEN = OLEN + INT((BLEN + 2) / 3) * 4
+     IF BLEN = 0 THEN OLEN = OLEN + 2
+     *
+     I = 0 ; OBUF = ""
+     CNT = INT(BLEN / 3)
+     LOOP WHILE CNT > 0 DO
+        I = I + 1 ; A = SEQ(INBUF[I, 1])
+        I = I + 1 ; B = SEQ(INBUF[I, 1])
+        I = I + 1 ; C = SEQ(INBUF[I, 1])
+        OBUF = OBUF:ETAB(MOD(INT(A / 4), 64) + 1)
+        OBUF = OBUF:ETAB(INT(MOD(A * 16, 64) / 16) * 16 + INT(B / 16) + 1)
+        OBUF = OBUF:ETAB(INT(MOD(B * 4, 64) / 4) * 4 + MOD(INT(C / 64), 4) + 1)
+        OBUF = OBUF:ETAB(MOD(C, 64) + 1)
+        IF MOD(I, LINEBREAK.LENGTH) = 0 THEN
+           OUTBUF = OUTBUF:OBUF:CR:LF
+           OBUF = ""
+        END
+        CNT = CNT - 1
+     REPEAT
+     *
+     BEGIN CASE
+        CASE DELTA = 1
+           I = I + 1 ; A = SEQ(INBUF[I, 1])
+           OBUF = OBUF:ETAB(MOD(INT(A / 4), 64) + 1)
+           OBUF = OBUF:ETAB(INT(MOD(A * 16, 64) / 16) * 16 + 1):"=="
+        CASE DELTA = 2
+           I = I + 1 ; A = SEQ(INBUF[I, 1])
+           I = I + 1 ; B = SEQ(INBUF[I, 1])
+           OBUF = OBUF:ETAB(MOD(INT(A / 4), 64)+ 1)
+           OBUF = OBUF:ETAB(INT(MOD(A * 16, 64) / 16) * 16 + INT(B / 16) + 1)
+           OBUF = OBUF:ETAB(INT(MOD(B * 4, 64) / 4) * 4 + 1):"="
+     END CASE
+     *
+     IF I = 0 OR MOD(I, LINEBREAK.LENGTH) # 0 THEN
+        OUTBUF = OUTBUF:OBUF:CR:LF
+     END ELSE OUTBUF = OUTBUF:OBUF
+     *
+     IF LEN(OUTBUF) # OLEN THEN
+        * Error! - Incorrect length calculated for base64 output
+        ERR = ERR.BAD.ENC
+     END
+     RETURN
+     *
+* ********************************************************************* *
+* Decodes 'INBUF' string containing base64-encoded ASCII. Chars with    *
+* ASCII code points <= 32 (this includes whitespace and newlines) and   *
+* >= 128 (Pick{like} system delimiters and other 8 bit chars) are       *
+* ignored. Returns the decoded data in 'OUTBUF'. Error if data contains *
+* invalid characters, i.e. not codes 'A'-'Z', 'a'-'z', '+', '/' or '='  *
+* or is incorrectly padded.                                             *
+* ********************************************************************* *
+2000*
+     * A static array that maps ASCII code points to a 6-bit integer,
+     * or -1 for an invalid code point.
+     *
+     DIM DTAB(128), CBUF(4)   ;* Decoding table, and a temp storage array!
+     *
+     MAT DTAB = (-1)          ;* Populate array with default entry of -1
+     *
+     DTAB(44) = 62 ; DTAB(48) = 63 ; DTAB(49) = 52 ; DTAB(50) = 53
+     DTAB(51) = 54 ; DTAB(52) = 55 ; DTAB(53) = 56 ; DTAB(54) = 57
+     DTAB(55) = 58 ; DTAB(56) = 59 ; DTAB(57) = 60 ; DTAB(58) = 61
+     DTAB(66) = 0  ; DTAB(67) = 1  ; DTAB(68) = 2  ; DTAB(69) = 3 
+     DTAB(70) = 4  ; DTAB(71) = 5  ; DTAB(72) = 6  ; DTAB(73) = 7 
+     DTAB(74) = 8  ; DTAB(75) = 9  ; DTAB(76) = 10 ; DTAB(77) = 11
+     DTAB(78) = 12 ; DTAB(79) = 13 ; DTAB(80) = 14 ; DTAB(81) = 15
+     DTAB(82) = 16 ; DTAB(83) = 17 ; DTAB(84) = 18 ; DTAB(85) = 19
+     DTAB(86) = 20 ; DTAB(87) = 21 ; DTAB(88) = 22 ; DTAB(89) = 23
+     DTAB(90) = 24 ; DTAB(91) = 25 ; DTAB(98) = 26 ; DTAB(99) = 27
+     DTAB(100) = 28; DTAB(101) = 29; DTAB(102) = 30; DTAB(103) = 31
+     DTAB(104) = 32; DTAB(105) = 33; DTAB(106) = 34; DTAB(107) = 35
+     DTAB(108) = 36; DTAB(109) = 37; DTAB(110) = 38; DTAB(111) = 39
+     DTAB(112) = 40; DTAB(113) = 41; DTAB(114) = 42; DTAB(115) = 43
+     DTAB(116) = 44; DTAB(117) = 45; DTAB(118) = 46; DTAB(119) = 47
+     DTAB(120) = 48; DTAB(121) = 49; DTAB(122) = 50; DTAB(123) = 51
+     *
+     I = 0 ; J = 0
+     LOOP WHILE I < BLEN AND NOT(ERR) DO
+        I = I + 1
+        C = SEQ(INBUF[I, 1])
+        IF C > 32 AND C < 128 THEN
+           J = J + 1
+           CBUF(J) = C
+           IF J = 4 THEN
+              GOSUB 3000
+              OUTBUF = OUTBUF:OBUF
+              J = 0
+           END
+        END
+     REPEAT
+     IF J AND NOT(ERR) THEN
+        * Error! - length not multiple of 4!
+        ERR = ERR.BAD.LGT
+     END
+     IF ERR THEN OUTBUF = ''  ;* Return null on error!
+     RETURN
+     *
+* ***************************************************************** *
+* Given a block of 4 encoded bytes in array 'CBUF()', this function *
+* decodes up to 3 bytes of output, and stores them in 'OBUF'        *
+* ***************************************************************** *
+3000*
+     DA = DTAB(CBUF(1) + 1)
+     DB = DTAB(CBUF(2) + 1)
+     C = CBUF(3) ; DC = DTAB(C + 1)
+     D = CBUF(4) ; DD = DTAB(D + 1)
+     *
+     * Check for invalid characters!
+     *
+     IF DA < 0 OR DB < 0 OR (DC < 0 AND C # 61) OR (DD < 0 AND D # 61) THEN
+        * Error! - Invalid character found in input stream
+        ERR = ERR.BAD.CHR
+        RETURN
+     END
+     *
+     OBUF = CHAR(DA * 4 + INT(DB / 16))
+     IF C # 61 THEN
+        OBUF = OBUF:CHAR(DB * 16 + INT(DC / 4))
+        IF D # 61 THEN OBUF = OBUF:CHAR(DC * 64 + DD)
+     END
+     RETURN
+*
+     END
