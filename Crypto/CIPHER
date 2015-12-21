@@ -1,0 +1,266 @@
+     SUBROUTINE CIPHER(MODE, PASSWD, INBUF, OUTBUF, ERR)
+*r83 SUBROUTINE CIPHER(MODE, PASSWD, INBUF, OUTBUF, ERR, MAT IK)
+* ********************************************************* *
+* ********************************************************* *
+* This subroutine implements a 'stream-cipher' function to  *
+* use with the IDEA encryption function. It is passed a     *
+* command to either 'encrypt' or 'decrypt' the plain text   *
+* passphrase, and string to operate on. Another string that *
+* represents the result of the operation is returned.       *
+* Note that encrypted text can be represented by a hex      *
+* string (modes 2 & 3, 7 & 8) for those platforms that have *
+* 'some difficulty' with characters like 0x00 and 0xFF      *
+*                                                           *
+* Passed:    MODE  - 0 = encrypt string in 'INBUF'          *
+*                    1 = decrypt string in 'INBUF'          *
+*                    2 = encrypt, but output is in hex      *
+*                    3 = decrypt, but input is in hex       *
+*                                                           *
+*                    4 = Convert PASSWD to MD5 hash, and    *
+*                        expand the IDEA key into 'IK()'    *
+*                                                           *
+*                 .. Following used after a mode 4 call ..  *
+*                    5 = encrypt string in 'INBUF'          *
+*                    6 = decrypt string in 'INBUF'          *
+*                    7 = encrypt, but output is in hex      *
+*                    8 = decrypt, but input is in hex       *
+*                                                           *
+*                 .. Use this to clear 'sensitive' data ..  *
+*                   99 = Clear the 'IK()' array             *
+*                                                           *
+*          PASSWD  - the pass-phrase for en/de-cryption.    *
+*           INBUF  - string on which the operation is to be *
+*                    performed.                             *
+*                                                           *
+* Retuned: OUTBUF  - string that represents the result of   *
+*                    the requested operation.               *
+*             ERR  - Possible error code when attempting a  *
+*                    decryption. The error values are:      *
+*                    0  =  No error.                        *
+*                    1  =  Input string invalid (too short) *
+*                    2  =  Incorrect key for decryption!    *
+*                                                           *
+* Note: Even though porting codes are included here for R83 *
+* style systems, using this function on those systems will  *
+* be a BIG performance problem. Consider other encryption   *
+* techiques in this case. This might all still be ok for    *
+* very small string encryption (eg: passwords)              *
+*                                                           *
+* Note: To improve performance when en/decrypting multiple  *
+* strings, use an option 4 call to get the expanded IDEA    *
+* key. This can then be re-used over multiple en/decryption *
+* calls using modes 5 to 8. Note that you should really     *
+* also use a mode 99 call when you are finished, to clear   *
+* this variable from common.                          (dmm) *
+* ********************************************************* *
+* ********************************************************* *
+     *
+     EQU GETMD5     TO 0      ;* Command to build MD5 hash in 1 call!
+     EQU IDEA.KS    TO 1      ;* Command to expand IDEA key
+     EQU IDEA.CRYPT TO 3      ;* Command to do IDEA crypto!
+     EQU IDEABLK    TO 8      ;* Size of an IDEA block
+     *
+     * Define storage area for expanded IDEA key!
+     *
+     COMMON /C$IDEA/ IK(52) ;* udt/uv
+*r83 DIM IK(52), MD5.STATE(7)
+     *
+     DIM IVBUF(8), XORBUF(8)  ;* Local temp storage buffers
+     *
+     IF MODE < 5 THEN
+        *
+        * Convert pass-phrase to MD5 hash block, then expand IDEA key.
+        *
+        MD5HASH = PASSWD
+        CALL MD5(GETMD5, MD5HASH)  ;* udt/uv
+*r83    CALL MD5(GETMD5, MD5HASH, MAT MD5.STATE)
+        *
+        CALL IDEA(IDEA.KS, MD5HASH, MAT IVBUF, MAT IK)
+        MD5HASH = ""          ;* Relinquish workspace
+        *
+        IF MODE = 4 THEN RETURN
+        HFLG = (MODE > 1)     ;* 'true' if dealing with hex strings
+     END ELSE
+        IF MODE = 99 THEN
+           * Clear expanded IDEA key!
+           MAT IK = ""
+           RETURN
+        END
+        HFLG = (MODE > 6)     ;* 'true' if dealing with hex strings
+     END
+     *
+     IF HFLG THEN
+        ENCRYPT = (MODE = 2 OR MODE = 7)
+     END ELSE
+        ENCRYPT = (MODE = 0 OR MODE = 5)
+     END
+     *
+     MAT IVBUF  = 0
+     MAT XORBUF = 0           ;* Initialise to a constant (any constant!)
+     ILEN = LEN(INBUF)        ;* Length of the input string
+     *
+     ERR      = 0
+     OUTBUF   = ""
+     CURRBYTE = 1
+     IF ENCRYPT THEN
+        * Build 'IV' (Initialisation Vector)
+        FOR I = 1 TO IDEABLK - 2
+           * Get random char in range 0..255
+           BYTE = RND(256)
+           GOSUB 1000
+           IF HFLG THEN
+              OUTBUF = OUTBUF:OCONV(BYTE, 'MCDX') "R%2"
+           END ELSE OUTBUF = OUTBUF:CHAR(BYTE)
+        NEXT I
+        I = RND(256)
+        J = RND(256)
+        FOR BP = 1 TO 2
+           BYTE = I ; GOSUB 1000
+           IF HFLG THEN
+              OUTBUF = OUTBUF:OCONV(BYTE, 'MCDX') "R%2"
+           END ELSE OUTBUF = OUTBUF:CHAR(BYTE)
+           BYTE = J ; GOSUB 1000
+           IF HFLG THEN
+              OUTBUF = OUTBUF:OCONV(BYTE, 'MCDX') "R%2"
+           END ELSE OUTBUF = OUTBUF:CHAR(BYTE)
+        NEXT BP
+        SPOS = 1
+     END ELSE
+        SPOS = (IDEABLK + 2)
+        IF HFLG THEN SPOS = SPOS * 2
+        IF ILEN < SPOS THEN
+           * We have a problem! The input string is too short
+           * to be a valid input for this function.
+           ERR = 1
+           RETURN
+        END
+        * When decrypting, input string may be in hex format (if HFLG
+        * is true). This can help avoid issues with 'funny chars'
+        FOR BP = 1 TO IDEABLK - 2
+           IF HFLG THEN
+              BYTE = OCONV(INBUF[BP*2-1, 2], 'MCXD')
+           END ELSE BYTE = SEQ(INBUF[BP, 1])
+           GOSUB 2000
+        NEXT BP
+        IF HFLG THEN
+           BYTE = OCONV(INBUF[(IDEABLK-1)*2-1, 2], 'MCXD')
+        END ELSE BYTE = SEQ(INBUF[IDEABLK-1, 1])
+        GOSUB 2000 ; I = BYTE
+        IF HFLG THEN
+           BYTE = OCONV(INBUF[IDEABLK*2-1, 2], 'MCXD')
+        END ELSE BYTE = SEQ(INBUF[IDEABLK, 1])
+        GOSUB 2000 ; J = BYTE
+        * Now, the _next_ 2 decrypted bytes must equal the values
+        * we have stored in 'I' and 'J' respectively. If not, then
+        * an incorrect de-cryption key has been specified!
+        IF HFLG THEN
+           BYTE = OCONV(INBUF[(IDEABLK+1)*2-1, 2], 'MCXD')
+        END ELSE BYTE = SEQ(INBUF[IDEABLK+1, 1])
+        GOSUB 2000
+        IF BYTE = I THEN
+           IF HFLG THEN
+              BYTE = OCONV(INBUF[(IDEABLK+2)*2-1, 2], 'MCXD')
+           END ELSE BYTE = SEQ(INBUF[IDEABLK+2, 1])
+           GOSUB 2000
+           IF BYTE # J THEN SPOS = 0
+        END ELSE SPOS = 0
+        IF SPOS < 1 THEN
+           * Error! - Invalid decryption key specified!
+           ERR = 2
+           RETURN
+        END
+        SPOS = SPOS + 1
+     END
+     *
+     * Do the main en/de-cryption.
+     *
+     IF ENCRYPT THEN
+        FOR I = SPOS TO ILEN STEP IDEABLK
+           BUFF = INBUF[I, IDEABLK]
+           BLEN = LEN(BUFF)
+           IF HFLG THEN
+              FOR BP = 1 TO BLEN
+                 BYTE = SEQ(BUFF[BP, 1])
+                 GOSUB 1000
+                 OUTBUF = OUTBUF:OCONV(BYTE, 'MCDX') "R%2"
+              NEXT BP
+           END ELSE
+              FOR BP = 1 TO BLEN
+                 BYTE = SEQ(BUFF[BP, 1])
+                 GOSUB 1000
+                 OUTBUF = OUTBUF:CHAR(BYTE)
+              NEXT BP
+           END
+        NEXT I
+     END ELSE
+        SEGSIZE = IDEABLK
+        IF HFLG THEN SEGSIZE = SEGSIZE * 2
+        FOR I = SPOS TO ILEN STEP SEGSIZE
+           BUFF = INBUF[I, SEGSIZE]
+           BLEN = LEN(BUFF)
+           IF HFLG THEN
+              FOR BP = 1 TO BLEN STEP 2
+                 BYTE = OCONV(BUFF[BP, 2], 'MCXD')
+                 GOSUB 2000
+                 OUTBUF = OUTBUF:CHAR(BYTE)
+              NEXT BP
+           END ELSE
+              FOR BP = 1 TO BLEN
+                 BYTE = SEQ(BUFF[BP, 1])
+                 GOSUB 2000
+                 OUTBUF = OUTBUF:CHAR(BYTE)
+              NEXT BP
+           END
+        NEXT I
+     END
+     RETURN
+     *
+* ****************************** *
+* Encrypt the contents of 'BYTE' *
+* ****************************** *
+1000*
+     IF CURRBYTE = IDEABLK THEN
+        CURRBYTE = 1
+        MAT XORBUF = MAT IVBUF
+        CALL IDEA(IDEA.CRYPT, "", MAT XORBUF, MAT IK)
+     END
+     BYTE = BITXOR(BYTE, XORBUF(CURRBYTE)) ;* udt/uv
+*r83 A = BYTE ; B = XORBUF(CURRBYTE)
+*r83 GOSUB 3000 ; BYTE = A
+     IVBUF(CURRBYTE) = BYTE
+     CURRBYTE = CURRBYTE + 1
+     RETURN
+     *
+* ****************************** *
+* Decrypt the contents of 'BYTE' *
+* ****************************** *
+2000*
+     IF CURRBYTE = IDEABLK THEN
+        CURRBYTE = 1
+        MAT XORBUF = MAT IVBUF
+        CALL IDEA(IDEA.CRYPT, "", MAT XORBUF, MAT IK)
+     END
+     IVBUF(CURRBYTE) = BYTE
+     BYTE = BITXOR(BYTE, XORBUF(CURRBYTE))  ;* udt/uv
+*r83 A = BYTE ; B = XORBUF(CURRBYTE)
+*r83 GOSUB 3000 ; BYTE = A
+     CURRBYTE = CURRBYTE + 1
+     RETURN
+     *
+* ******************************** *
+* XOR passed variables 'A' and 'B' *
+* return the 8 bit result in 'A',  *
+* and variable 'B' is set to null. *
+* ******************************** *
+3000*
+     T0 = 0 ; T1 = 1
+     FOR T2 = 1 TO 8  ;* Note we only XOR 8 bits!!
+        IF MOD(INT(A / T1), 2) # MOD(INT(B / T1), 2) THEN
+           T0 = T0 + T1
+        END
+        T1 = T1 * 2
+     NEXT T2
+     A = T0 ; B = ""
+     RETURN
+*
+     END
