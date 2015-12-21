@@ -1,0 +1,97 @@
+*
+* Simple test for 'CIPHER' function!
+*
+*r83 DIM IK(52)
+*
+ST = SYSTEM(12)
+FOR I = 100 TO 175
+   PLAIN = STR('A', I)
+   *
+   PASSWD = "this is my password phrase!"
+*r83  CALL CIPHER(2, PASSWD, PLAIN, OUTBUF, ERR, MAT IK)
+   CALL CIPHER(2, PASSWD, PLAIN, OUTBUF, ERR)  ;* uv/udt
+   IF ERR THEN DEBUG
+   *
+*r83  CALL CIPHER(3, PASSWD, OUTBUF, NEWTXT, ERR, MAT IK)
+   CALL CIPHER(3, PASSWD, OUTBUF, NEWTXT, ERR) ;* uv/udt
+   IF ERR THEN DEBUG
+   IF PLAIN # NEWTXT THEN
+      CRT I, "Non-reversable encryption error!"
+      DEBUG
+   END
+   *
+   * These test return non-hex data, so only valid on platforms
+   * like uv/udt (ie no problem with 0xff in data). Will fail on R83
+   CALL CIPHER(0, PASSWD, PLAIN, OUTBUF, ERR)  ;* uv/udt
+   IF ERR THEN DEBUG                           ;* uv/udt
+   CALL CIPHER(1, PASSWD, OUTBUF, NEWTXT, ERR) ;* uv/udt
+   IF ERR THEN DEBUG                           ;* uv/udt
+   IF PLAIN # NEWTXT THEN                      ;* uv/udt
+      CRT I, "Non-reversable encryption error!";* uv/udt
+      STOP                                     ;* uv/udt
+   END                                         ;* uv/udt
+   *
+NEXT I
+CRT SYSTEM(12)-ST
+*
+ST = SYSTEM(12)
+PASSWD = "this is my password phrase!"
+*r83  CALL CIPHER(4, PASSWD, PLAIN, OUTBUF, ERR, MAT IK)
+CALL CIPHER(4, PASSWD, PLAIN, OUTBUF, ERR) ;* uv/udt
+FOR I = 100 TO 175
+   PLAIN = STR('A', I)
+   *
+*r83  CALL CIPHER(7, PASSWD, PLAIN, OUTBUF, ERR, MAT IK)
+   CALL CIPHER(7, PASSWD, PLAIN, OUTBUF, ERR) ;* uv/udt
+   IF ERR THEN DEBUG
+   *
+*r83  CALL CIPHER(8, PASSWD, OUTBUF, NEWTXT, ERR, MAT IK)
+   CALL CIPHER(8, PASSWD, OUTBUF, NEWTXT, ERR) ;* uv/udt
+   IF ERR THEN DEBUG
+   IF PLAIN # NEWTXT THEN
+      CRT I, "Non-reversable encryption error!"
+      DEBUG
+   END
+   *
+   * These test return non-hex data, so only valid on platforms
+   * like uv/udt (ie no problem with 0xff in data). Will fail on R83
+   CALL CIPHER(5, PASSWD, PLAIN, OUTBUF, ERR)  ;* uv/udt
+   IF ERR THEN DEBUG                           ;* uv/udt
+   CALL CIPHER(6, PASSWD, OUTBUF, NEWTXT, ERR) ;* uv/udt
+   IF ERR THEN DEBUG                           ;* uv/udt
+   IF PLAIN # NEWTXT THEN                      ;* uv/udt
+      CRT I, "Non-reversable encryption error!";* uv/udt
+      STOP                                     ;* uv/udt
+   END                                         ;* uv/udt
+   *
+NEXT I
+*r83  CALL CIPHER(99, PASSWD, PLAIN, OUTBUF, ERR, MAT IK)
+CALL CIPHER(99, PASSWD, PLAIN, OUTBUF, ERR) ;* uv/udt
+CRT SYSTEM(12)-ST
+*
+* Test longer plaintext string!
+*
+PLAIN = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+PLAIN = PLAIN:"0123456789~!@#$%^&*()_+|`-=\][{}';:/.,<>?"
+PLAIN = PLAIN:STR(PLAIN, 75)
+CRT 'Plain text length = ':LEN(PLAIN)
+*
+CRT 'Encrypting...'
+PASSWD = "this is my password phrase!"
+*r83  CALL CIPHER(2, PASSWD, PLAIN, OUTBUF, ERR, MAT IK)
+CALL CIPHER(0, PASSWD, PLAIN, OUTBUF, ERR)   ;* uv/udt
+IF ERR THEN DEBUG
+*
+CRT 'Decrypting...'
+*r83  CALL CIPHER(3, PASSWD, OUTBUF, NEWTXT, ERR, MAT IK)
+CALL CIPHER(1, PASSWD, OUTBUF, NEWTXT, ERR)  ;* uv/udt
+IF ERR THEN DEBUG
+*
+IF NEWTXT # PLAIN THEN
+   CRT 'Long test encryption/decryption failed!'
+   STOP
+END
+*
+CRT 'IDEA cipher encryption/decryption tests ok!'
+*
+END
