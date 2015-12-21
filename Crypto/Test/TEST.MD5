@@ -1,0 +1,46 @@
+*
+* test the MD5 hash generator!
+*
+*r83 DIM MD5.STATE(7)
+*
+DIM TVALS(3), T(2, 7)
+*
+T(1,1)= ""
+T(1,2)= "a"
+T(1,3)= "abc"
+T(1,4)= "message digest"
+T(1,5)= "abcdefghijklmnopqrstuvwxyz"
+T(1,6)= "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+T(1,7)= "12345678901234567890123456789012345678901234567890123456789012345678901234567890"
+*
+T(2,1)="D41D8CD98F00B204E9800998ECF8427E"
+T(2,2)="0CC175B9C0F1B6A831C399E269772661"
+T(2,3)="900150983CD24FB0D6963F7D28E17F72"
+T(2,4)="F96B697D7CB7938D525A2F31AAF161D0"
+T(2,5)="C3FCD3D76192E4007DFB496CCA67E13B"
+T(2,6)="D174AB98D277D9F5A5611C2C9F419D9F"
+T(2,7)="57EDF4A22BE3C955AC49DA2E2107B67A"
+*
+FOR I = 1 TO 7
+*r83   CALL MD5(1, '', MAT MD5.STATE)       ;* Init
+*r83   CALL MD5(2, T(1, I), MAT MD5.STATE)  ;* add
+*r83   CALL MD5(3, SVAL, MAT MD5.STATE)     ;* finalise!
+   CALL MD5(1, '')      ;* udt/uv
+   CALL MD5(2, T(1, I)) ;* udt/uv
+   CALL MD5(3, SVAL)    ;* udt/uv
+   IF SVAL # T(2, I) THEN
+      CRT I:' - Error! Expected: ':T(2,I):', generated hash: ':SVAL
+      STOP
+   END
+   SVAL = T(1, I)
+*r83   CALL MD5(0, SVAL, MAT MD5.STATE)
+    CALL MD5(0, SVAL)    ;* udt/uv
+    IF SVAL # T(2, I) THEN
+       CRT I:' - Mode 0 Error! Expected: ':T(2,I):', generated hash: ':SVAL
+       STOP
+    END
+NEXT I
+*
+CRT 'MD5 test completed ok!'
+*
+END
