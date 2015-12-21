@@ -1,0 +1,111 @@
+          FRAME 511
+*CRC16
+*08 SEP 1996
+*DMM
+*
+* 0 = CRC16  - Fast 16 bit CRC generation for passed string.
+*              From: Joe Campbell, 'C Programmers Guide to Serial
+*              Communications' - Chapter 19.
+*
+*              Invoked via Basic conversion processor. Use:
+*
+*               CRC = OCONV(STRING, 'U01FF')  - return decmial CRC, or
+*          
+*               CRC = ICONV(STRING, 'U01FF')  - return 4 digit hex CRC
+*
+*              Eg: The string '123456789' returns CRC value 0x31C3
+*************************************************************************
+*
+          EP !CRC16                    * 16 bit CRC generator
+*
+CHARH0    DEFC R0,H0                   * Redefine 'H0' as character
+CHARH1    DEFC R0,H1                   * Redefine 'H1' as character
+CHARH2    DEFC R0,H2                   * Redefine 'H2' as character
+*
+* Define lookup table for CCITT 16 bit 'classic hardware model' CRC
+*
+CRCTBL    EQU *
+          TEXT X'00001021',X'20423063',X'408450A5',X'60C670E7',X'81089129'
+          TEXT X'A14AB16B',X'C18CD1AD',X'E1CEF1EF',X'12310210',X'32732252'
+          TEXT X'52B54294',X'72F762D6',X'93398318',X'B37BA35A',X'D3BDC39C'
+          TEXT X'F3FFE3DE',X'24623443',X'04201401',X'64E674C7',X'44A45485'
+          TEXT X'A56AB54B',X'85289509',X'E5EEF5CF',X'C5ACD58D',X'36532672'
+          TEXT X'16110630',X'76D766F6',X'569546B4',X'B75BA77A',X'97198738'
+          TEXT X'F7DFE7FE',X'D79DC7BC',X'48C458E5',X'688678A7',X'08401861'
+          TEXT X'28023823',X'C9CCD9ED',X'E98EF9AF',X'89489969',X'A90AB92B'
+          TEXT X'5AF54AD4',X'7AB76A96',X'1A710A50',X'3A332A12',X'DBFDCBDC'
+          TEXT X'FBBFEB9E',X'9B798B58',X'BB3BAB1A',X'6CA67C87',X'4CE45CC5'
+          TEXT X'2C223C03',X'0C601C41',X'EDAEFD8F',X'CDECDDCD',X'AD2ABD0B'
+          TEXT X'8D689D49',X'7E976EB6',X'5ED54EF4',X'3E132E32',X'1E510E70'
+          TEXT X'FF9FEFBE',X'DFDDCFFC',X'BF1BAF3A',X'9F598F78',X'918881A9'
+          TEXT X'B1CAA1EB',X'D10CC12D',X'F14EE16F',X'108000A1',X'30C220E3'
+          TEXT X'50044025',X'70466067',X'83B99398',X'A3FBB3DA',X'C33DD31C'
+          TEXT X'E37FF35E',X'02B11290',X'22F332D2',X'42355214',X'62777256'
+          TEXT X'B5EAA5CB',X'95A88589',X'F56EE54F',X'D52CC50D',X'34E224C3'
+          TEXT X'14A00481',X'74666447',X'54244405',X'A7DBB7FA',X'879997B8'
+          TEXT X'E75FF77E',X'C71DD73C',X'26D336F2',X'069116B0',X'66577676'
+          TEXT X'46155634',X'D94CC96D',X'F90EE92F',X'99C889E9',X'B98AA9AB'
+          TEXT X'58444865',X'78066827',X'18C008E1',X'388228A3',X'CB7DDB5C'
+          TEXT X'EB3FFB1E',X'8BF99BD8',X'ABBBBB9A',X'4A755A54',X'6A377A16'
+          TEXT X'0AF11AD0',X'2AB33A92',X'FD2EED0F',X'DD6CCD4D',X'BDAAAD8B'
+          TEXT X'9DE88DC9',X'7C266C07',X'5C644C45',X'3CA22C83',X'1CE00CC1'
+          TEXT X'EF1FFF3E',X'CF5DDF7C',X'AF9BBFBA',X'8FD99FF8',X'6E177E36'
+          TEXT X'4E555E74',X'2E933EB2',X'0ED11EF0'
+*
+* ************************************************************** *
+* ************************************************************** *
+* 16 bit CRC generation. Invoked via Basic conversion processor. *
+*                                                                *
+* Element usage: D0, TS, TSEND, R14, R15                         *
+*                                                                *
+* 'T0' used as the CRC accumulator, and 'T1' used as a scratch   * 
+* area for determining the index value into the table. 'TS' is   *
+* used to traverse the passed string.                            *
+* ************************************************************** *
+* ************************************************************** *
+*
+!CRC16    EQU *
+          MOV TSBEG,TS                 * Use 'TS' to traverse passed str.
+          ZERO D0                      * Clear our CRC and scratch tally
+          SRA R15,H1                   * Point 'R15' to high byte in 'T0'
+!LOOP     INC TS                       * Point 'TS' to next character
+          BCE TS,SM,!DONE              * Jump if passed end-of-string
+          SRA R14,CRCTBL               * Point 'R14' at lookup table!
+*
+* Now we want to XOR the high byte of the accumulator (in 'H1')
+* with the current data byte (character pointed to by 'TS')
+*
+          XOR R15,TS                   * XOR high byte of 'T0' with data
+          MCC R15,CHARH2               * load result into low byte of 'T1'
+          INC T1,T1                    * Shift left to effect 'T1 * 2'
+*
+* The resultant value now in 'T1' is used as an index into the lookup table
+*
+          INC R14,T1                   * Position 'R14' within the table!
+*
+* Now XOR the CRC value from the table with low byte of the accumulator.
+* Do this by moving the low byte of 'T0' into the high byte, then XOR'ing
+* this with the high byte of the CRC table value. Replace low byte of 'T0'
+* with low byte of CRC table value.
+*
+          MCC CHARH0,CHARH1            * shift low byte to high in 'T0'
+          XOR R15,R14                  * XOR high byte of 'T0' and CRC
+          MIC R14,CHARH0               * low byte of CRC into low 'T0'
+          ZERO T1                      * Clear scratch tally 'T1'
+          B !LOOP                      * and repeat loop for next char!
+*
+* All done, so convert result (in 'T0') into ascii in 'TS'.
+*
+!DONE     EQU *
+          MOV TSBEG,TS                 * Reset the 'TS' buffer pointer
+          BBS MBIT,!DOHEX              * Jump if we need to return hex
+          MBD D0,TS                    * return a +ve 16 bit CRC value!
+          B !EXIT                      * Terminate return value & exit!
+!DOHEX    MOV T0,T1                    * Mov CRC out of 'T0' for next instr
+          MBXN 4,T1,TS                 * return a 4 digit hex value
+!EXIT     MCI SM,TS                    * terminate crc value with 'SM'
+          DEC TS                       * back up 'TS' from terminator
+          MOV TS,TSEND                 * set 'TSEND = TS'
+          ENT CONVEXIT                 * all done!
+*
+*EOI
