@@ -1,0 +1,259 @@
+PROGRAM BTREE.LIST
+* Generic Btree index file list function  -  [dmm Feb '96]
+***************************************************************************
+* Utility - Used to list contents of index file to terminal. Handy 
+* for verification of index contents, or just as an index 'browser'.
+*
+* Notes:
+*
+* Data files for which indexes have been defined will have a $BTREE item
+* in their dictionary. The actual index itself is in a file with a name
+* built from the datafile name suffixed with the string '.IDX'
+*
+* The '$BTREE' definition item has the structure:
+*
+* <1>    = 'X'
+* <2. m> = mv'd - index descriptions
+* <3. m> = mv'd - indexed attribute reference
+*          eg: 0 (key), 1 (attr 1), 1.4 (attr 1, value 4)
+* <4. m> = mv'd - expressions (for OCONV), corresponding to <3.m>
+* <5. m> = mv'd - input conversion codes, corresponding to <3.m>
+* <6. m> = mv'd - indexed string justification codes ('null' = AL)
+* <7. m> = mv'd - key value justification codes ('null' = 1)
+* <8. m> = mv'd - maximum node sizes (in bytes) if not default
+* <9. m> = mv'd - flags (implemented as 'bit flags') where:
+*    bit 0 = true, if MV/SMV index info to be stored
+*        1 = true, if indexed string must be 'upper cased'
+*        2 = true, if unique values only may be indexed
+*        3 = true, if null values are to be ignored
+*        4 = true, if indexing on each word
+*
+* Rel: 1.0
+***************************************************************************
+*
+     EQU AM TO CHAR(254), VM TO CHAR(253), SVM TO CHAR(252)
+     EQU SPCE TO CHAR(32), TRUE TO 1, FALSE TO 0, ROOT.ID TO 0, DOT TO '.'
+*
+     EQU BTREE.DEFN.ID TO "$BTREE"
+     EQU E.INDEX.EOF   TO -1      ;* 'End-of-index' code
+*
+*    The 'DIM' statement that follows may be removed/commented out if
+*    the BTREE.READ function has been amended to use a 'named common'
+*    block for 'state' storage. This second method is recommended on
+*    those platforms that support named common.
+*
+!*!  COMMON /R$BTREE/ STATE(8)    ;* Array to hold persistent 'state'
+     DIM STATE(8)                 ;* Remove (and from param list in the
+*                                    BTREE.READ calls) then enable prior
+*                                    line to use 'named common'!
+*
+     EQU NODE      TO STATE(1)    ;* Current index 'node'
+     EQU T         TO STATE(2)    ;* Key value for 'NODE'
+     EQU POS       TO STATE(3)    ;* Position in 'NODE' of 'LAST.ID'
+*
+*    Get command line info before it can be destoyed! - Note: Use of the
+*    'ERROR()' function is R83 specific! - Amend this code as required.
+*
+     IF SYSTEM(16) = 0 THEN
+        BUFF = TRIM(ERROR())      ;* r83
+!jBase  BUFF = TRIM(@SENTENCE)
+!ap     TCLREAD BUFF ; BUFF = TRIM(BUFF)
+        IF FIELD(BUFF, SPCE, 1) = 'RUN' THEN
+           FNAME = FIELD(BUFF, SPCE, 4)
+        END ELSE FNAME = FIELD(BUFF, SPCE, 2)
+     END ELSE
+        IF SYSTEM(10) THEN
+           ECHO OFF
+           INPUT FNAME
+           ECHO ON
+        END ELSE FNAME = ''
+     END
+*
+*    Get data filename to work with
+*
+     PROMPT ''
+     IF FNAME > '' THEN
+        GOSUB 2000
+     END
+     IF FNAME = '' THEN
+        LOOP
+           CRT
+           ERRFLG = FALSE
+           CRT 'Enter Data Filename, or <RETURN> to exit :':
+           INPUT FNAME
+           IF FNAME > '' THEN
+              GOSUB 2000
+              ERRFLG = (FNAME = '')
+           END
+        WHILE ERRFLG DO REPEAT
+        IF FNAME = '' THEN STOP
+     END
+*
+*    Choose index to display
+*
+     DESC = INDEX.DEFN<2>         ;* Index descriptions
+     NO.VALS = DCOUNT(INDEX.DEFN<3>, VM)
+     LOOP
+        CRT
+        ERRFLG = TRUE
+        FOR I = 1 TO NO.VALS
+           CRT I "R#3.":SPCE:DESC<1, I>"L#25":SPCE:INDEX.DEFN<3, I>
+        NEXT I
+        CRT
+        CRT 'Enter index number, or <RETURN> to exit  :':
+        INPUT INDEX.POS
+        IF INDEX.POS MATCHES "1N0N" THEN
+           IF INDEX.POS >= 1 AND INDEX.POS <= NO.VALS THEN
+              ERRFLG = FALSE      ;* Index selected!
+           END ELSE
+              CRT "'":INDEX.POS:"' is not a valid index - try again."
+           END
+        END ELSE
+           IF INDEX.POS > '' THEN
+              CRT 'Enter an integer in the range 1 - ':NO.VALS
+           END ELSE ERRFLG = FALSE
+        END
+     WHILE ERRFLG DO REPEAT
+     IF INDEX.POS = '' THEN STOP
+*
+*    Get starting string value for display
+*
+     SMODE = 0                    ;* Default initial search 'mode'
+     MODE  = 4                    ;* Default traversal 'mode'
+     LOOP
+        CRT
+        ERRFLG = FALSE
+        CRT 'Enter start value, or <RETURN> for more options :':
+        INPUT INDEX.VAL
+        IF INDEX.VAL = '' THEN
+           CRT
+           CRT '1. Start at beginning of index'
+           CRT '2. Start from end of index'
+           CRT '3. Use NULL as starting value'
+           CRT
+           CRT 'Select option, <RETURN> = 3   :':
+           INPUT OPTION
+           IF OPTION = '' THEN OPTION = 3
+           IF NOT(OPTION = 1 OR OPTION = 2 OR OPTION = 3) THEN
+              CRT 'Error - Selection must be from 1, 2 or 3'
+              ERRFLG = TRUE
+           END ELSE
+*             Change default search mode if required!
+              IF OPTION # 3 THEN SMODE = OPTION + 1
+              IF SMODE = 3 THEN MODE = 5
+           END
+        END
+     WHILE ERRFLG DO REPEAT
+*
+*    Get search direction. That is, forwards or backwards
+*
+     LOOP
+        CRT
+        ERRFLG = FALSE
+        IF MODE = 4 THEN
+           CRT "Enter Direction 'F' or 'B', <RETURN> = 'F'      :":
+           DEF.REPLY = 'F'
+        END ELSE
+           CRT "Enter Direction 'F' or 'B', <RETURN> = 'B'      :":
+           DEF.REPLY = 'B'
+        END
+        INPUT REPLY
+        IF REPLY > '' THEN
+           REPLY = OCONV(REPLY, 'MCU')
+        END ELSE REPLY = DEF.REPLY
+        IF NOT(REPLY = 'F' OR REPLY = 'B') THEN
+           CRT "Error - select one of 'F' (Forwards) or 'B' (Backwards)"
+           ERRFLG = TRUE
+        END ELSE
+           IF REPLY = 'B' THEN MODE = 5 ELSE MODE = 4
+        END
+     WHILE ERRFLG DO REPEAT
+*
+*    Get number of index entries to return in each 'index read'
+*
+     LOOP
+        CRT
+        ERRFLG = FALSE
+        CRT 'Number of items in each read, <RETURN> = 1      :':
+        INPUT MAX.IDS
+        IF MAX.IDS = '' THEN MAX.IDS = 1
+        IF NOT(MAX.IDS MATCHES "1N0N" AND MAX.IDS > 0) THEN
+           CRT "Must be an integer > 0"
+           ERRFLG = TRUE
+        END
+     WHILE ERRFLG DO REPEAT
+*
+*    Ok, now that we have all the info, we can do the read/display!
+*
+     SVALUE = INDEX.VAL
+     LSTR   = LEN(SVALUE)
+     ALL    = (SMODE > 1)
+     HED    = 'File ':FNAME:'.IDX '
+     NO.BLANKS = 79 - 31 - LEN(HED)
+     IF NO.BLANKS > 0 THEN
+        HED = HED:SPACE(NO.BLANKS):"'T' Page 'PLL'"
+     END ELSE
+        HED = HED:"   Page 'PLL'"
+     END
+     HED = HED:"   No.  Key value       Indexed String            MV/SMV ptrs'L'"
+     HED = HED:"   ---  ---------       --------------            -----------'L'"
+     HEADING HED
+*
+     KOUNT = 0 ; QUIT = FALSE
+     CALL BTREE.READ(SMODE, F.INDX, INDEX.POS, MAX.IDS, INDEX.VAL, KVAL, ERRFLG, MAT STATE)
+     LOOP
+        EOF = (ERRFLG = E.INDEX.EOF OR (NOT(ALL) AND INDEX.VAL[1, LSTR] # SVALUE))
+     UNTIL EOF DO
+        GOSUB 1000
+        IF QUIT THEN
+           KVAL = ''
+           ERRFLG = E.INDEX.EOF   ;* Set to 'end-of-index' 
+        END ELSE
+           CALL BTREE.READ(MODE, F.INDX, INDEX.POS, MAX.IDS, INDEX.VAL, KVAL, ERRFLG, MAT STATE)
+        END
+     REPEAT
+     IF KVAL > '' THEN GOSUB 1000
+     HEADING ""
+     PRINT
+     PRINT '** ':KOUNT:' Items listed **'
+     STOP
+*
+* ********************************** *
+* Display returned values from index *
+* ********************************** *
+1000*
+     NO.VALS = DCOUNT(KVAL<1>, VM)
+     FOR I = 1 TO NO.VALS UNTIL QUIT
+        SVAL = KVAL<2, I>
+        IF NOT(ALL) THEN QUIT = (SVAL[1, LSTR] # SVALUE)
+        IF NOT(QUIT) THEN
+           KOUNT = KOUNT + 1
+           PRINT KOUNT "R#5.  ":KVAL<1, I> "L#15 ":SVAL "L#25 ":KVAL<3, I>
+        END
+     NEXT I
+     RETURN
+*
+* *********************** *
+* Validate/open file name *
+* passed in 'FNAME'.      *
+* *********************** *
+2000*
+     IF FNAME > '' THEN 
+        OPEN 'DICT', FNAME TO F.DICT THEN
+           READ INDEX.DEFN FROM F.DICT, BTREE.DEFN.ID THEN
+              OPEN '',FNAME:'.IDX' TO F.INDX ELSE
+                 CRT "'":FNAME:"' has no index file created for it!"
+                 FNAME = ''
+              END
+           END ELSE
+              CRT "'":FNAME:"' has no index definition item!"
+              FNAME = ''
+           END
+        END ELSE
+           CRT "Cannot open DICT '":FNAME:"'"
+           FNAME = ''
+        END
+     END
+     RETURN
+*
+     END
