@@ -1,0 +1,528 @@
+PROGRAM BTREE.ADMIN
+* Generic Btree index admin function  -  [dmm Feb '96]
+***************************************************************************
+* Utility - Used to create/amend/delete Btree index definition items.
+*
+* Notes:
+*
+* Data files for which indexes have been defined will have a $BTREE item
+* in their dictionary. The actual index itself is in a file with a name
+* built from the datafile name suffixed with the string '.IDX'
+*
+* The '$BTREE' definition item has the structure:
+*
+* <1>    = 'X'
+* <2. m> = mv'd - index descriptions
+* <3. m> = mv'd - indexed attribute reference
+*          eg: 0 (key), 1 (attr 1), 1.4 (attr 1, value 4)
+* <4. m> = mv'd - expressions (for OCONV), corresponding to <3.m>
+* <5. m> = mv'd - input conversion codes, corresponding to <3.m>
+* <6. m> = mv'd - indexed string justification codes ('null' = AL)
+* <7. m> = mv'd - key value justification codes ('null' = 1)
+* <8. m> = mv'd - maximum node sizes (in bytes) if not default
+* <9. m> = mv'd - flags (implemented as 'bit flags') where:
+*    bit 0 = true, if MV/SMV index info to be stored
+*        1 = true, if indexed string must be 'upper cased'
+*        2 = true, if unique values only may be indexed
+*        3 = true, if null values are to be ignored
+*        4 = true, if indexing on each word
+*
+* Note that when passed to the update function, the first 2 attributes
+* of this structure will have been deleted. Also note that this is not
+* intended as a 'spiffy' input program, but rather as a quick and easy
+* way to generate and manage the indexes defined on a file. Coded to
+* be as 'platform neutral' as possible.
+*
+* Rel: 1.0
+***************************************************************************
+*
+     EQU AM TO CHAR(254), VM TO CHAR(253), SVM TO CHAR(252)
+     EQU TRUE TO 1, FALSE TO 0, BELL TO CHAR(7), DOT TO '.'
+*
+     EQU BTREE.DEFN.ID TO "$BTREE"
+*
+     PROMPT ''
+     ERASE      = @(-1)                 ;* Clear screen
+     EOL        = @(-4)                 ;* Clear to end-of-line
+     HON        = @(-7)                 ;* Half intensity ON
+     HOFF       = @(-8)                 ;* Half intensity OFF
+     WINDOW     = 15                    ;* Window size for index list
+     DEFN.SZ    = 9                     ;* Attributes in $BTREE item
+     MAX.FLDS   = 12                    ;* Number of input fields
+     FNAME.XY   = @(21,3)               ;* X,Y coords for filename
+     FNAME.POS  = FNAME.XY:EOL:FNAME.XY ;* Filename input prompt pos
+     MAX.WIDTH  = SYSTEM(2)             ;* Terminal width
+     MAX.DEPTH  = SYSTEM(3)-1           ;* Terminal depth
+     CLERR      = @(0,MAX.DEPTH):EOL:@(0,MAX.DEPTH)
+     OPTION.POS = @(8,MAX.DEPTH-1):SPACE(6):@(8,MAX.DEPTH-1)
+     INDEX.PRMT = @(0,MAX.DEPTH):"Enter Index Number :":EOL:@(20,MAX.DEPTH)
+     UPD.PRMT   = @(0,MAX.DEPTH):"OK to update index ?":EOL:@(20,MAX.DEPTH)
+*
+     BGS = HON:@(00,00):"BTREE.ADMIN":@(MAX.WIDTH-LEN(TIMEDATE()),00):TIMEDATE()
+     BGS = BGS:@(00,01):STR('-',MAX.WIDTH)
+     BGS = BGS:@(06,03):'File Name    :'
+     BGS = BGS:@(17,05):'----- Current index definitions -----'
+     BGS = BGS:@(03,06):'Index    Description':@(60,06):'Page    of'
+     BGS = BGS:@(00,MAX.DEPTH-1):'Command:'
+     BGS = BGS:@(20,MAX.DEPTH-1):"(FI=File, EX=Exit, A=Amend index, N=New, D=Delete, ?=help)":HOFF
+*
+     BGS1 = HON:@(00,00):"BTREE.ADMIN":@(MAX.WIDTH-LEN(TIMEDATE()),00):TIMEDATE()
+     BGS1 = BGS1:@(00,01):STR('-',MAX.WIDTH)
+     BGS1 = BGS1:@(06,03):'File Name    :':@(03,05):'1. Description  :'
+     BGS1 = BGS1:@(03,06):'2. Indexed Attr.:'
+     BGS1 = BGS1:@(03,07):'3. Conversion   :':@(51,08):'-- Index Flags --'
+     BGS1 = BGS1:@(03,09):'4. Maximum node size (null = 500) :'
+     BGS1 = BGS1:@(48,09):'8. Upper-Case values  :'
+     BGS1 = BGS1:@(03,10):"5. Indexed 'string' justification :"
+     BGS1 = BGS1:@(48,10):"9. Suppress 'nulls'   :"
+     BGS1 = BGS1:@(03,11):"6. Indexed 'key' justification    :"
+     BGS1 = BGS1:@(47,11):'10. Unique values only :'
+     BGS1 = BGS1:@(03,12):'7. Input conversion code (ICONV)  :'
+     BGS1 = BGS1:@(47,12):'11. Index on each word :'
+     BGS1 = BGS1:@(47,13):'12. Save MV/SMV data   :'
+     BGS1 = BGS1:@(06,15):"** Screen Navigation Tips **"
+     BGS1 = BGS1:@(06,17):"Use the following special keys to navigate this screen:"
+     BGS1 = BGS1:@(06,18):"'+' = go to next field    '\' Clear field to 'null'"
+     BGS1 = BGS1:@(06,19):"'-' = go to prior field   '?' Display help for field"
+     BGS1 = BGS1:@(06,20):"Press RETURN on a null (empty) field to use default."
+     BGS1 = BGS1:@(00,MAX.DEPTH-1):'Command:'
+     BGS1 = BGS1:@(20,MAX.DEPTH-1):"(FI=File, EX=Exit, 'n'=Amend field 'n', ?=help)":HOFF
+*
+*    Define array of input positions, lengths, default values and help text
+*
+     DIM IO(12, 5), SCR(12)
+*
+     IO(1, 1) = @(21, 05) ; IO(1, 2) = 50 ; IO(1, 3) = '' ; IO(1, 4) = 0
+     IO(1, 5) = 'Enter description for this index file.'
+     IO(2, 1) = @(21, 06) ; IO(2, 2) = 50 ; IO(2, 3) = '' ; IO(2, 4) = 5
+     IO(2, 5) = 'Enter index attribute definition (eg: 0 = key, 1 = attr 1)'
+     IO(3, 1) = @(21, 07) ; IO(3, 2) = 50 ; IO(3, 3) = '' ; IO(3, 4) = 0
+     IO(3, 5) = 'Enter conversion code to apply to indexed string value.'
+     IO(4, 1) = @(39, 09) ; IO(4, 2) = 4  ; IO(4, 3) = '500' ; IO(4, 4) = 1
+     IO(4, 5) = 'Enter index node size (in bytes). Set to 500 by default'
+     IO(5, 1) = @(39, 10) ; IO(5, 2) = 4  ; IO(5, 3) = 'AL' ; IO(5, 4) = 2
+     IO(5, 5) = 'Enter index value justification: AL, AR, DL or DR - null = AL'
+     IO(6, 1) = @(39, 11) ; IO(6, 2) = 4  ; IO(6, 3) = '-1' ; IO(6, 4) = 3
+     IO(6, 5) = 'Enter key justification: -1, 1, AL, AR, DL or DR - null = -1'
+     IO(7, 1) = @(39, 12) ; IO(7, 2) = 7  ; IO(7, 3) = '' ; IO(7, 4) = 0
+     IO(7, 5) = "Enter Input conversion code to store with this index entry"
+     IO(8, 1) = @(72, 09) ; IO(8, 2) = 3  ; IO(8, 3) = 'N' ; IO(8, 4) = 4
+     IO(8, 5) = 'Convert strings to upper-case before indexing ? Y/N'
+     IO(9, 1) = @(72, 10) ; IO(9, 2) = 3  ; IO(9, 3) = 'N' ; IO(9, 4) = 4
+     IO(9, 5) = "Suppress indexing of 'null' values ? Y/N"
+     IO(10, 1) = @(72, 11) ; IO(10, 2) = 3  ; IO(10, 3) = 'N' ; IO(10, 4) = 4
+     IO(10, 5) = "Suppress indexing of 'duplicate' values ? Y/N"
+     IO(11, 1) = @(72, 12) ; IO(11, 2) = 3  ; IO(11, 3) = 'N' ; IO(11, 4) = 4
+     IO(11, 5) = "Index on each (space delimited) 'word' in indexed value ? Y/N"
+     IO(12, 1) = @(72, 13) ; IO(12, 2) = 3  ; IO(12, 3) = 'N' ; IO(12, 4) = 4
+     IO(12, 5) = 'Include value/sub-value positional data in index ? Y/N'
+*
+*    Define error messages
+*
+     EM1 = "Cannot open file"
+     EM2 = "Invalid option or command"
+     EM3 = "Invalid field number. Must be an integer in range 1 to ":MAX.FLDS
+     EM4 = "Enter command code, or use < & > keys to page"
+     EM5 = "Index number must be an integer in the range 1 to "
+     EM6 = "There are no index definitions for this file!"
+     EM7 = "Enter data file name, or RETURN to exit"
+     EM8 = "Enter 'Y' for Yes or 'N' for No"
+     EM9 = "Input must be an integer > 0"
+     EM10 = "Mandatory field - Must enter something"
+     EM11 = "Enter field number to change, FI to save or EX to exit"
+     EM12 = "Index definition MUST be defined"
+     EM13 = "There is no NEXT page of index details to display"
+     EM14 = "There is no PREVIOUS page of index details to display"
+     EM15 = "Enter 'Y' to update index file, 'N' to abort update"
+     EM16 = "Must be one of AL, AR, DL or DR"
+     EM17 = "Must be one of AL, AR, DL, DR, 1 or -1"
+     EM18 = "Index attribute must be a number >= 0. Eg: 0, 1, 3.4 ..etc"
+*
+*    Print screen, then prompt for filename
+*
+     LOOP
+        FNAME = ''
+        QUIT = FALSE                 ;* Set exit flag to OFF
+        CRT ERASE:BGS:               ;* Clear terminal / display screen
+        LOOP
+           CRT FNAME.POS:            ;* Position for filename input
+           INPUT REPLY               ;* Accept filename from user
+           BEGIN CASE
+              CASE REPLY = '' OR REPLY = '\'
+                 QUIT = TRUE         ;* Exit admin program!
+              CASE REPLY = '?'
+                 ERRFLG = EM7
+                 GOSUB 9000
+              CASE 1
+                 OPEN 'DICT', REPLY TO F.DICT THEN
+                    READU INDEX.DEFN FROM F.DICT, BTREE.DEFN.ID ELSE
+                       INDEX.DEFN = 'X'
+                    END
+                    FNAME = REPLY    ;* Save name of index file
+                 END ELSE
+                    ERRFLG = EM1:" '":REPLY:"'"
+                    GOSUB 9000
+                 END
+           END CASE
+        UNTIL QUIT OR FNAME > '' DO REPEAT
+     UNTIL QUIT DO
+        * Display current index definitions, and prompt user for action!
+        GOSUB 3000                   ;* Load/display current index info!
+        BUSY = TRUE 
+        LOOP
+           CRT OPTION.POS:           ;* Position cursor for input
+           INPUT REPLY,5:            ;* Allow up to 5 characters in reply
+           BEGIN CASE
+              CASE REPLY = 'EX'
+                 BUSY = FALSE        ;* Go get new filename to work with!
+              CASE REPLY = 'FI'      ;* Update index item, regen if req'd!
+                 GOSUB 4000          ;* Go update index details!
+                 BUSY = FALSE        ;* Go get new filename to work with!
+              CASE REPLY = 'A'       ;* Amend an index!
+                 GOSUB 2000
+                 IF OK THEN
+                    * Load / display existing detail
+                    Z = INDEX.DEFN<9, INDX.NO>
+                    SCR(1) = INDEX.DEFN<2, INDX.NO> 
+                    SCR(2) = INDEX.DEFN<3, INDX.NO>
+                    SCR(3) = INDEX.DEFN<4, INDX.NO>
+                    SCR(4) = INDEX.DEFN<8, INDX.NO>
+                    SCR(5) = INDEX.DEFN<6, INDX.NO>
+                    SCR(6) = INDEX.DEFN<7, INDX.NO>
+                    SCR(7) = INDEX.DEFN<5, INDX.NO>
+                    SCR(8) = "NY"[MOD(INT(Z / 2), 2) + 1, 1]
+                    SCR(9) = "NY"[MOD(INT(Z / 8), 2) + 1, 1]
+                    SCR(10) = "NY"[MOD(INT(Z / 4), 2) + 1, 1]
+                    SCR(11) = "NY"[MOD(INT(Z / 16), 2) + 1, 1]
+                    SCR(12) = "NY"[MOD(Z, 2) + 1, 1]
+                    BUFF = ERASE:BGS1:FNAME.XY:FNAME
+                    FOR I = 1 TO MAX.FLDS
+                       IF SCR(I) = '' AND IO(I, 3) > '' THEN
+                          SCR(I) = IO(I, 3)
+                       END
+                       BUFF = BUFF:IO(I, 1):SCR(I)
+                    NEXT I
+                    CRT BUFF:        ;* Display screen, with defaults!
+                    GOSUB 1100       ;* Go allow amendment!
+                    CRT ERASE:BGS:FNAME.XY:FNAME:
+                    GOSUB 3000       ;* Re-display index details
+                 END
+              CASE REPLY = 'D'       ;* Delete an index!
+                 GOSUB 2000
+                 IF OK THEN
+                    CRT CLERR:
+                    FOR I = 2 TO DEFN.SZ
+                       INDEX.DEFN = DELETE(INDEX.DEFN, I, INDX.NO, 0)
+                    NEXT I
+                    GOSUB 3000       ;* Re-display index list!
+                 END
+              CASE REPLY = 'N'       ;* Add a New index!
+                 INDX.NO = DCOUNT(INDEX.DEFN<3>, VM) + 1
+                 CRT ERASE:BGS1:FNAME.XY:FNAME:
+                 FLD = 1             ;* Init fld counter
+                 MAT SCR = ''        ;* Reset for new index!
+                 MFLAG = FALSE       ;* Set modify flag OFF
+                 GOSUB 1000          ;* Go to next screen!
+                 GOSUB 1100          ;* Allow amendment, or ok/exit!
+                 CRT ERASE:BGS:FNAME.XY:FNAME:
+                 GOSUB 3000          ;* Re-display index details
+              CASE REPLY = '>'       ;* Display NEXT page of index data
+                 GOSUB 3100
+              CASE REPLY = '<'       ;* Display PREV page of index data
+                 GOSUB 3200
+              CASE REPLY = '?'       ;* Display some help
+                 ERRFLG = EM4
+                 GOSUB 9000
+           END CASE
+        WHILE BUSY DO REPEAT
+     REPEAT
+     CRT ERASE:
+     STOP
+*
+*    Display 2nd screen. Insert or amend specific index data!
+*
+1000*
+     LOOP
+        OK = FALSE                   ;* Set valid input flag to OFF
+        IF SCR(FLD) = '' THEN        ;* Previous input for this prompt?
+           DEF = IO(FLD, 3)          ;* No, so use any default value
+        END ELSE DEF = SCR(FLD)      ;* Yes, so use the previous input
+        FPOS = IO(FLD, 1)            ;* X,Y position for input
+        LGTH = IO(FLD, 2)            ;* Length for input
+        CEOL = SPACE(LGTH)           ;* Spaces to 'blank out' this field
+        DISP = FPOS:CEOL:FPOS 
+        CRT DISP:                    ;* Position for input, clear field!
+        INPUT REPLY, LGTH            ;* Accept max 'LGTH' chars as input
+        IF REPLY = '' THEN           ;* If null, re-instate prior value!
+           CRT DISP:DEF:
+           REPLY = DEF
+        END ELSE
+           IF REPLY = '\' THEN       ;* Clear field contents to null?
+              REPLY = ''
+           END
+        END
+        BEGIN CASE
+           CASE REPLY = '-'          ;* Go back (up) a field ?
+              CRT DISP:DEF:          ;* Yes, redisp current field value,
+              FLD = FLD - 1          ;* then decrement field counter
+              IF FLD < 1 THEN FLD = MAX.FLDS + 1
+           CASE REPLY = '+'          ;* Go forward (down) a field?
+              CRT DISP:DEF:          ;* Yes, redisp current field value,
+              FLD = FLD + 1          ;* then increment field counter
+           CASE REPLY = '?'          ;* Display some help
+              ERRFLG = IO(FLD, 5)    ;* Get help infor for this prompt
+              GOSUB 9000
+           CASE 1
+              * Input not a command so perform processing for each prompt!
+              IF IO(FLD, 4) > 0 THEN
+                 ON IO(FLD, 4) GOSUB 1200, 1300, 1400, 1500, 1600
+                 IF OK THEN          ;* Input validation ok ?
+                    SCR(FLD) = REPLY
+                    CRT DISP:REPLY:
+                    FLD = FLD + 1
+                 END
+              END ELSE
+                 SCR(FLD) = REPLY
+                 CRT DISP:REPLY:
+                 FLD = FLD + 1
+                 OK  = TRUE
+              END
+        END CASE
+     UNTIL FLD > MAX.FLDS OR (MFLAG AND OK) DO REPEAT
+     RETURN
+*
+*    Command line input routine. Allow mods to screen, get user
+*    ok to save or exit.
+*
+1100*
+     DONE = FALSE
+     MFLAG = TRUE                    ;* Set modify flag to ON
+     LOOP
+        CRT OPTION.POS:              ;* Position cursor for input
+        INPUT REPLY,5:               ;* Allow up to 5 characters in reply
+        BEGIN CASE
+           CASE REPLY = 'EX'         ;* Are we to exit program ?
+              DONE = TRUE            ;* Yes, set exit flag
+           CASE REPLY = 'FI'         ;* Update index details now?
+              IF SCR(2) = '' THEN
+                 ERRFLG = EM12
+                 GOSUB 9000
+              END ELSE
+                 INDEX.DEFN<2, INDX.NO> = SCR(1)
+                 INDEX.DEFN<3, INDX.NO> = SCR(2)
+                 INDEX.DEFN<4, INDX.NO> = SCR(3)
+                 INDEX.DEFN<8, INDX.NO> = SCR(4)
+                 INDEX.DEFN<6, INDX.NO> = SCR(5)
+                 INDEX.DEFN<7, INDX.NO> = SCR(6)
+                 INDEX.DEFN<5, INDX.NO> = SCR(7)
+                 Z = (SCR(12) = 'Y')
+                 IF SCR(8)  = 'Y' THEN Z = Z + 2
+                 IF SCR(10) = 'Y' THEN Z = Z + 4
+                 IF SCR(9)  = 'Y' THEN Z = Z + 8
+                 IF SCR(11) = 'Y' THEN Z = Z + 16
+                 INDEX.DEFN<9, INDX.NO> = Z
+                 DONE = TRUE
+              END
+          CASE REPLY = '?'           ;* Display some help?
+              ERRFLG = EM11
+              GOSUB 9000
+          CASE 1
+              * Was input a number ? If so, amend that field!
+              IF REPLY MATCHES '1N0N' THEN
+                 IF REPLY > 0 AND REPLY <= MAX.FLDS THEN
+                    FLD = REPLY     ;* Set field counter
+                    GOSUB 1000      ;* Go make mod to field
+                 END ELSE
+                    ERRFLG = EM2    ;* Invalid field number
+                    GOSUB 9000
+                 END
+              END ELSE
+                  ERRFLG = EM2      ;* Invalid option or command
+                  GOSUB 9000
+              END
+        END CASE
+     UNTIL DONE DO REPEAT
+     RETURN
+*
+*    Validate input for node size
+*
+1200*
+     OK = TRUE
+     IF NOT(REPLY MATCHES "1N0N" AND REPLY > 0) THEN
+        ERRFLG = EM9
+        GOSUB 9000
+        OK = FALSE
+     END
+     RETURN
+*
+*    Validate index string sequence
+*
+1300*
+     OK = (INDEX('AL,AR,DL,DR,', REPLY:',', 1) > 0)
+     IF NOT(OK) THEN
+        ERRFLG = EM16
+        GOSUB 9000
+     END
+     RETURN
+*
+*    Validate index key sequence (secondary sort!)
+*
+1400*
+     OK = (INDEX('AL,AR,DL,DR,1,-1,', REPLY:',', 1) > 0)
+     IF NOT(OK) THEN
+        ERRFLG = EM17
+        GOSUB 9000
+     END
+     RETURN
+*
+*    Validate input as 'Y' for Yes or 'N' for No
+*
+1500*
+     Z = OCONV(REPLY, 'MCU')
+     IF Z = 'Y' OR Z = 'N' THEN
+        REPLY = Z
+        OK = TRUE
+     END ELSE
+        ERRFLG = EM8
+        GOSUB 9000
+        OK = FALSE
+     END
+     RETURN
+*
+*    Validate index attribute reference
+*
+1600*
+     IF REPLY > "" THEN
+        OK = (NUM(REPLY) AND REPLY >= 0)
+        IF NOT(OK) THEN
+           ERRFLG = EM18
+           GOSUB 9000
+        END
+     END ELSE
+        ERRFLG = EM10
+        GOSUB 9000
+        OK = FALSE
+     END
+     RETURN
+*
+*    Prompt for, then accept and verify an index to amend/delete
+*    Return 'OK' set 'true' if a valid index selected, and set
+*    'INDX.NO' to the selected index number.
+*
+2000*
+     IF INDEX.CNT < 1 THEN           ;* Exit if no index defined!
+        ERRFLG = EM6
+        GOSUB 9000
+        OK = FALSE
+        RETURN
+     END
+     LOOP
+        OK = FALSE
+        CRT INDEX.PRMT:              ;* Prompt user for an index no.
+        INPUT INDX.NO,5:
+        IF INDX.NO > '' THEN
+           IF INDX.NO MATCHES "1N0N" THEN
+              IF INDX.NO > 0 AND INDX.NO <= INDEX.CNT THEN
+                 OK = TRUE
+              END ELSE
+                 ERRFLG = EM5:INDEX.CNT
+                 GOSUB 9000
+              END
+           END ELSE
+              ERRFLG = EM5:INDEX.CNT
+              GOSUB 9000
+           END
+        END ELSE
+           OK = FALSE
+           CRT CLERR:
+        END
+     UNTIL OK OR INDX.NO = '' DO REPEAT
+     RETURN
+*
+*    Display FIRST page of index data for this file!
+*
+3000*
+     PAGE.NO = 1                     ;* Reset to page #1 !
+     INDEX.CNT = DCOUNT(INDEX.DEFN<3>, VM)
+     NO.PAGES = INT((INDEX.CNT - 1 ) / WINDOW) + 1
+     GOSUB 3300                      ;* Display the first page!
+     RETURN
+*
+*    Display NEXT page of index data
+*
+3100*
+     IF PAGE.NO + 1 > NO.PAGES THEN
+        ERRFLG = EM13                ;* No next page to display!
+        GOSUB 9000
+        RETURN
+     END
+     PAGE.NO = PAGE.NO + 1
+     GOSUB 3300
+     RETURN
+*
+*    Display PREVIOUS page of index data
+*
+3200*
+     IF PAGE.NO - 1 < 1 THEN
+        ERRFLG = EM14                ;* No prior page to display!
+        GOSUB 9000
+        RETURN
+     END
+     PAGE.NO = PAGE.NO - 1
+     GOSUB 3300
+     RETURN
+*
+*    Do actual page display
+*
+3300*
+     Z = 1
+     START.VAL = (PAGE.NO-1) * WINDOW + 1
+     END.VAL   = START.VAL + WINDOW - 1
+     PAGE.DATA = @(65,6):PAGE.NO:@(71,6):NO.PAGES
+     FOR I = START.VAL TO END.VAL
+        IF I > INDEX.CNT THEN
+           PAGE.DATA = PAGE.DATA:@(05,6+Z):EOL
+        END ELSE
+           PAGE.DATA = PAGE.DATA:@(05,6+Z):I"L#7":INDEX.DEFN<2,I>"L#50"
+        END
+        Z = Z + 1
+     NEXT I
+     CRT PAGE.DATA:
+     RETURN
+*
+*    Update index file info
+*
+4000*
+     WRITE INDEX.DEFN ON F.DICT, BTREE.DEFN.ID
+*    Prompt user for ok to update index files now!
+     LOOP
+        OK = FALSE
+        CRT UPD.PRMT:                ;* Prompt user for OK to regen.
+        INPUT REPLY,5:
+        IF REPLY = '?' THEN
+           ERRFLG = EM15             ;* Display help text
+           GOSUB 9000
+        END ELSE GOSUB 1500          ;* Validate input as Y or N ?
+     UNTIL OK DO REPEAT
+     IF REPLY = 'Y' THEN
+        IF DCOUNT(INDEX.DEFN<3>, VM) > 0 THEN
+           DATA FNAME                ;* Pass file name to 'BTREE.REGEN'
+           EXECUTE 'BTREE.REGEN'     ;* Regenerate indexes for this file!
+        END ELSE
+*          All indexes have been deleted! - We are NOT responsible
+*          for deleting the file. - Just remove the index definition item!
+           DELETE F.DICT, BTREE.DEFN.ID
+        END
+     END
+     CRT CLERR:                      ;* Clear the warning message!
+     RETURN
+*
+*    Display error messages
+*
+9000*
+     CRT CLERR:ERRFLG:' - Hit RETURN':BELL:
+     INPUT CRLF,1:
+     CRT CLERR:
+     RETURN
+*
+     END
