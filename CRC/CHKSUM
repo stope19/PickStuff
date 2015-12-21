@@ -1,0 +1,47 @@
+SUBROUTINE CHKSUM(SVAL, CRC)
+* **************************************************** *
+* **************************************************** *
+* Function to generate a CRC-16 checksum for a string. *
+* This checksum is compatible with the intrinsic       *
+* CHECKSUM() function supplied with uniVerse.          *
+* Note: This function is VERY slow!        (dmm 1/96)  *
+*                                                      *
+* Parameters: SVAL - String to derive checksum for.    *
+*              CRC - Returned checksum for 'SVAL'.     *
+*                                                      *
+* Note: As this function uses no 'bit' operators, it   *
+* may be used on platforms like R83. It's important to *
+* note that this code has real performance problems!   *
+* **************************************************** *
+* **************************************************** *
+   *
+   DIM TBL(8)  ;* Use a 'table' to avoid use of 'PWR()' function!  
+   *
+   TBL(1) = 256  ; TBL(2) = 512  ; TBL(3) = 1024  ; TBL(4) = 2048
+   TBL(5) = 4096 ; TBL(6) = 8192 ; TBL(7) = 16384 ; TBL(8) = 32768
+   *
+   CRC  = 0
+   LGTH = LEN(SVAL)
+   FOR I = 1 TO LGTH
+      CVAL = SEQ(SVAL[I, 1]) * 256  ;* Char value shifted left 8 bits!
+      TEMP = MOD(CRC, 256)          ;* Isolate lower 8 bits of accum.
+      FOR J = 1 TO 8                ;* Now XOR 'Z' and 'CRC' into 'TEMP'
+         P = TBL(J)                 ;* Derive 'PWR(2, J+7)' from table
+         IF MOD(INT(CRC / P), 2) # MOD(INT(CVAL / P), 2) THEN TEMP = TEMP + P
+      NEXT J
+      CRC = TEMP                    ;* Replace accum. with XOR'd result!
+      FOR J = 1 TO 8
+         * MSB bit set ?
+         IF MOD(INT(CRC / 32768), 2) THEN
+            CRC = CRC - 32768       ;* Remove the MSB from accumulator
+            CRC = CRC + CRC         ;* then Shift left 1 bit
+            * XOR our crc accumulator with the CCITT poly 0x01021
+            IF MOD(CRC, 2)             THEN CRC = CRC - 1    ELSE CRC = CRC + 1
+            IF MOD(INT(CRC / 32), 2)   THEN CRC = CRC - 32   ELSE CRC = CRC + 32
+            IF MOD(INT(CRC / 4096), 2) THEN CRC = CRC - 4096 ELSE CRC = CRC + 4096
+         END ELSE CRC = CRC + CRC   ;* Shift left 1 bit
+      NEXT J
+   NEXT I
+   RETURN
+*
+   END
