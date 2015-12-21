@@ -1,0 +1,521 @@
+SUBROUTINE BTREE.READ(MODE, F.INDX, INDEX.POS, MAX.IDS, I.STR, IDLIST, ERRFLG, MAT STATE)
+* Generic Btree read function  -  [dmm Feb '96]
+***************************************************************************
+* Passed:
+*       MODE - 0 = Position in index, return next entry
+*              1 = Position in index, return previous entry
+*              2 = Position at start of index, return next entry
+*              3 = Position at end of index, return previous entry
+*              4 = Get next value(s)
+*              5 = Get prev value(s)
+*              6 = Build select list from index
+*     F.INDX - file handle to index file
+*  INDEX.POS - Index number we want to read from
+*    MAX.IDS - Number of entries to read
+*      I.STR - Indexed value to find if 'MODE' < 4
+*            - Index file name if 'MODE' = 6
+*
+* Returned:
+*      I.STR - Last index value accessed
+*     IDLIST - Item keys (may be up to 'MAX.IDS' mv'd keys)
+*              <1> = mv'd list of index 'key' entries
+*              <2> = mv'd list of indexed strings for <1>
+*              <3> = mv'd list of VM SVM pointers (svm delimited)
+*                    NB: This attr only returned if index contains
+*                        this pointer information.
+*     ERRFLG - 0 = no error, -1 = end-of-index
+*              1 = bad 'MODE' parameter
+*              2 = error reading index (Index corrupt!)
+*
+* Node structure:
+*  <1. m>  = Indexed strings
+*  <2. m>  = Node ptrs (if <3, 1> = 0), else key values
+*  <3, 1>  = 1 = leaf, 0 = non-leaf
+*  <3, 2>  = number of entries in node
+*  <3, 3>  = left sibling node      [leftmost node if root]
+*  <3, 4>  = right sibling node     [rightmost node if root]
+*  <3, 5>  = pointer to parent node [null if root]
+*          [next values stored in root node only!]
+*  <3, 6>  = last used node item-id
+*  <3, 7>  = tree 'depth'
+*  <3, 8>  = sort sequence for <1>
+*            one of: AL, AR, DL, DR ('null' = AL)
+*  <3, 9>  = sort sequence for <2>
+*            one of: 1, -1, AL, AR, DL, DR ('null' = 1)
+*  <3, 10> = 1 = MV/SVM pointers stored, 0 = not stored.
+*  <3, 11> = max node size (bytes)
+*  <4. m>  = MV/SMV index pairs (svm delimited) for each leaf entry,
+*            if flag in <3, 10> is 'true'. Else null.
+*
+* Index locking: The index is _not_ locked during read access, with the
+* exception of when 'MODE' is set to 6. In this case we lock to inhibit
+* update while using the Query processor to collect the key list.
+*
+* Rel: 1.0
+***************************************************************************
+*
+     EQU AM TO CHAR(254), VM TO CHAR(253), SVM TO CHAR(252)
+     EQU SPCE TO CHAR(32), TRUE TO 1, FALSE TO 0, ROOT.ID TO 0, DOT TO '.'
+*
+     EQU BTREE.DEFN.ID   TO "$BTREE"
+*
+     EQU BIG.INT         TO 99999 ;* A 'rather' large integer!
+     EQU MAX.RETRY       TO 5     ;* Access retries before assuming error
+*
+     EQU E.INDEX.EOF     TO -1    ;* 'End-of-index' code
+     EQU E.BAD.MODE      TO 1     ;* Bad 'MODE' error code
+     EQU E.IDX.CORRUPT   TO 2     ;* Index is corrupt!
+*
+     EQU MODE.POS.NEXT   TO 0     ;* Position in index, return next entry
+     EQU MODE.POS.PREV   TO 1     ;* Position in index, return prev. entry
+     EQU MODE.START.NEXT TO 2     ;* Position at start, return next entry
+     EQU MODE.END.PREV   TO 3     ;* Position at end, return prev. entry
+     EQU MODE.GET.NEXT   TO 4     ;* Get next entry(s)
+     EQU MODE.GET.PREV   TO 5     ;* Get prev. entry(s)
+     EQU MODE.MAKE.LIST  TO 6     ;* Build select list from index
+*
+*    The 'STATE' array is used to maintain 'state' across 'calls'. It is
+*    best represented as a 'named common' structure on those platforms
+*    that support this concept. Otherwise, pass in argument list or store
+*    in a standard common block ..etc
+*
+!*!  COMMON /R$BTREE/ STATE(8)    ;* Array to hold persistent 'state'
+     DIM STATE(8)                 ;* Remove (and from param list) then
+*                                    enable prior line to use 'common'!
+*
+     EQU NODE      TO STATE(1)    ;* Current index 'node'
+     EQU T         TO STATE(2)    ;* Key value for 'NODE'
+     EQU POS       TO STATE(3)    ;* Position in 'NODE' of 'LAST.ID'
+     EQU BPOS      TO STATE(4)    ;* Total entries in 'NODE'
+     EQU KSEQ      TO STATE(5)    ;* Key sequence code
+     EQU MFLG      TO STATE(6)    ;* True if MV info stored in index
+     EQU LAST.ID   TO STATE(7)    ;* Last key value returned
+     EQU LAST.STR  TO STATE(8)    ;* Indexed string for 'LAST.ID'
+*
+     IDLIST = ''                  ;* Clear list used to return data
+     KOUNT  = 0                   ;* Count of items returned
+     ERRFLG = FALSE               ;* Assume no error!
+     PFX    = INDEX.POS:DOT       ;* Index item-id prefix
+*
+     BEGIN CASE
+        CASE MODE = MODE.POS.NEXT OR MODE = MODE.POS.PREV
+*          Position in index, return next/prev entry(s)
+           GOSUB 1000
+        CASE MODE = MODE.START.NEXT OR MODE = MODE.END.PREV
+*          Position at start/end of index, return next/prev entry(s)
+           GOSUB 1000
+        CASE MODE = MODE.GET.NEXT
+*          Get next value(s) from current index position!
+           GOSUB 4000
+        CASE MODE = MODE.GET.PREV
+*          Get prev value(s) from current index position!
+           GOSUB 5000
+        CASE MODE = MODE.MAKE.LIST
+*          Build select list from index!
+           GOSUB 6000
+        CASE 1
+*          Error - Invalid request!
+           ERRFLG = E.BAD.MODE
+     END CASE
+     RETURN
+*
+* ********************************************* *
+* Set position in index according to 'MODE' and *
+* value passed in 'I.STR'. Then, either return  *
+* the key at that position, or if not found in  *
+* index, the key of the closest match. If we    *
+* are requesting more than 1 key, then get      *
+* subsequent keys as well.                      *
+* ********************************************* *
+1000*
+     LAST.ID = ''                 ;* Clear 'last seen' index entry!
+     GOSUB 2000                   ;* Attempt to get position in index!
+     BEGIN CASE
+        CASE ERRFLG = E.INDEX.EOF
+           NULL                   ;* Exit if at 'end of index file'!
+        CASE ERRFLG
+*
+*          We seem to have a corrupt index file! - At this point, we could
+*          print an error message, or just return with the error flag set.
+*
+           CRT 'Index read error!'
+        CASE 1
+*          'Current' key value, defined at position 'POS'!
+           KOUNT   = 1            ;* Number of keys to return (so far)
+           I.STR   = NODE<1, POS> ;* Actual indexed string value found!
+           LAST.ID = NODE<2, POS> ;* Key found for indexed value 'I.STR'
+           IDLIST  = LAST.ID      ;* Put 1st key into 'return list'
+           IDLIST<2> = I.STR      ;* Return corresponding string as well
+           IF MFLG THEN IDLIST<3> = NODE<4, POS>
+*          Are we still looking for more entries to return?
+           IF MAX.IDS - KOUNT > 0 THEN
+              IF MODE = MODE.POS.NEXT OR MODE = MODE.START.NEXT THEN
+                 GOSUB 4000       ;* Get _next_ entries from index
+              END ELSE
+                 GOSUB 5000       ;* Get _prev_ entries from index
+              END
+           END ELSE
+              LAST.STR = I.STR    ;* Save 'I.STR' match for 'LAST.ID'
+           END
+     END CASE
+     RETURN
+*
+* ***************************************** *
+* Find position of 'I.STR' in the index.    *
+* Set 'POS' to that value (or last position *
+* in a 'run' of same 'I.STR' if 'MODE' is   *
+* set for a reverse traversal). Set 'FOUND' *
+* to true if 'I.STR' is found in the index! *
+* ***************************************** *
+2000*
+     INIT.CNT = 0
+     FOUND = FALSE                ;* Assume 'I.STR' _not_ in index!
+     LOOP
+        GOSUB 3000                ;* Read 'root', find 'I.STR' in leaf!
+        BEGIN CASE
+           CASE ERRFLG            ;* Error in 'root', or end-of-index. Exit!
+              RETURN
+           CASE LAST.ID > ''
+*             Function being called as an 'error recovery' procedure. We
+*             have in 'LAST.ID' the _last_ valid key for 'I.STR' taken
+*             from index. Find that value again (or nearest neighbour) so
+*             we can continue from that point! If no match on 'I.STR' in
+*             node, then entry cannot exist, so exit!
+              BPOS = NODE<3, 2>   ;* Number of entries in this node!
+              IF POS > BPOS OR NODE<1, POS> # I.STR THEN RETURN
+              IF POS > 1 THEN
+                 APOS = INDEX(NODE<2>, VM, POS-1)
+                 NEW.NODE = NODE<2>[APOS+1, BIG.INT]
+                 IF KSEQ > 1 THEN
+                    LOCATE(LAST.ID, NEW.NODE, 1; Z1; KSEQ) ELSE NULL
+                 END ELSE LOCATE(LAST.ID, NEW.NODE, 1; Z1) ELSE NULL
+                 POS = POS + Z1 - 1    ;* Include orig 'offset' position!
+              END ELSE
+                 IF KSEQ > 1 THEN
+                    LOCATE(LAST.ID, NODE, 2; POS; KSEQ) ELSE NULL
+                 END ELSE LOCATE(LAST.ID, NODE, 2; POS) ELSE NULL
+              END
+              LOOP
+                 IF POS > BPOS AND NODE<1, BPOS> = I.STR THEN
+                    TEMP.T = NODE<3, 4>
+                 END ELSE TEMP.T = ''
+              WHILE TEMP.T > '' DO
+                 T = TEMP.T
+                 READ NODE FROM F.INDX, PFX:T THEN
+                    BPOS = NODE<3, 2>
+                    IF KSEQ > 1 THEN
+                       LOCATE(LAST.ID, NODE, 2; POS; KSEQ) ELSE NULL
+                    END ELSE LOCATE(LAST.ID, NODE, 2; POS) ELSE NULL
+                 END ELSE
+                    ERRFLG = E.IDX.CORRUPT
+                    POS = BPOS - 1     ;* Force exit from this loop!
+                 END
+              REPEAT
+              IF NOT(ERRFLG) THEN
+                 IF POS > BPOS OR NODE<1, POS> # I.STR THEN
+                    LOOP
+                       POS = POS - 1
+                    WHILE POS > 0 AND NODE<1, POS> # I.STR DO REPEAT
+                    POS = POS + 1      ;* Plus 1 to next extract position!
+                 END ELSE
+                    FOUND = (NODE<2, POS> = LAST.ID)
+                 END
+              END
+           CASE MODE = MODE.POS.NEXT OR MODE = MODE.POS.PREV
+              BPOS = NODE<3, 2>        ;* Number of entries in this node!
+              FOUND = (POS <= BPOS AND NODE<1, POS> = I.STR)
+              IF FOUND THEN
+                 IF MODE = MODE.POS.PREV THEN
+*                   Find last occurrence of 'I.STR', and return with 'POS'
+*                   set to this point. That is, last value in 'run'.
+                    LOOP
+                       IF NODE<1, BPOS> = I.STR THEN
+                          TEMP.T = NODE<3, 4> ; POS = BPOS
+                          IF TEMP.T > '' THEN
+                             READ TEMP.NODE FROM F.INDX, PFX:TEMP.T THEN
+                                IF TEMP.NODE<1, 1> = I.STR THEN
+                                   NODE = TEMP.NODE ; T = TEMP.T
+                                   BPOS = NODE<3, 2> ; POS = 1
+                                END ELSE TEMP.T = ''
+                             END ELSE
+                                ERRFLG = E.IDX.CORRUPT
+                                TEMP.T = ''
+                             END
+                          END
+                       END ELSE TEMP.T = ''
+                    WHILE TEMP.T > '' DO REPEAT
+                    IF NOT(ERRFLG) THEN
+*                      Try 1 or 2 'binary chops' to avoid excessive looping!
+                       APOS = POS + INT((BPOS - POS) / 2)
+                       IF NODE<1, APOS> = I.STR THEN
+                          POS = APOS
+                          IF BPOS - POS > 20 THEN
+                             APOS = POS + INT((BPOS - POS) / 2)
+                             IF NODE<1, APOS> = I.STR THEN POS = APOS
+                          END
+                       END
+                       LOOP
+                          POS = POS + 1 
+                       WHILE NODE<1, POS> = I.STR AND POS <= BPOS DO REPEAT
+                       POS = POS - 1   ;* Backup to last entry in 'run'!
+                    END
+                 END
+              END ELSE
+*                Check for 'end-of-tree' conditions!
+                 IF MODE = MODE.POS.NEXT AND POS > BPOS THEN
+                    IF NODE<3, 4> = '' THEN ERRFLG = E.INDEX.EOF
+                 END ELSE
+                    IF MODE = MODE.POS.PREV AND NODE<3, 3> = '' THEN
+                       ERRFLG = E.INDEX.EOF
+                    END
+                 END
+              END
+           CASE 1
+              IF ROOT.DTA<1, 1> = 0 THEN
+                 IF MODE = MODE.START.NEXT THEN
+                    T = ROOT.DTA<1, 3>
+                 END ELSE T = ROOT.DTA<1, 4>
+                 READ NODE FROM F.INDX, PFX:T ELSE ERRFLG = E.IDX.CORRUPT
+              END
+              IF NOT(ERRFLG) THEN
+                 BPOS = NODE<3, 2>     ;* Number of entries in this node
+                 IF MODE = MODE.START.NEXT THEN POS = 1 ELSE POS = BPOS
+                 FOUND = TRUE
+              END
+        END CASE
+     WHILE (ERRFLG AND NOT(ERRFLG = E.INDEX.EOF)) AND INIT.CNT < MAX.RETRY DO
+        INIT.CNT = INIT.CNT + 1   ;* Inc local retry counter!
+        ERRFLG = FALSE            ;* Clear error flag
+     REPEAT
+     RETURN
+*
+* ***************************************************** *
+* Scan tree to leaf level looking for first 'I.STR'.    *
+* Returns 'POS' as position of entry (or nearest entry  *
+* in index, given index sequence code) and 'NODE' & 'T' *
+* representing the index node referenced by 'POS'       *
+* ***************************************************** *
+3000*
+     ROOT.CNT   = 0
+     LOOP
+        T = ROOT.ID               ;* Set 'T' to 'root node' known item-id
+*       Read 'root node' for this index, exit if index is empty!
+        READ NODE FROM F.INDX, PFX:T THEN
+           ROOT.DTA = NODE<3>     ;* Index structure info stored in root!
+           SSEQ = ROOT.DTA<1, 8>  ;* Indexed value insert sequence
+           KSEQ = ROOT.DTA<1, 9>  ;* Key value insert sequence
+           MFLG = ROOT.DTA<1, 10> ;* Flag, true if MV/SMV pointers stored
+*          Locate starting point in root node!
+           LOCATE(I.STR, NODE, 1; POS; SSEQ) ELSE
+*             Allow for special case, where only 'string' in root node is a
+*             'null' (which means no data/delimiters in 'NODE<1>', and an
+*             'I.STR' of > 'null'. 'LOCATE()' output may need adjusting.
+              IF POS = 1 AND NODE<1> = '' AND NODE<3, 2> > 0 AND I.STR > '' THEN
+                 LOCATE(I.STR, VM, 1; POS; SSEQ) ELSE IF POS # 1 THEN POS = 2
+              END
+           END
+*          Navigate down tree to leaf!
+           LOOP WHILE NODE<3, 1> = 0 AND NOT(ERRFLG) DO
+              T = NODE<2, POS>
+              READ NODE FROM F.INDX, PFX:T THEN
+                 LOCATE(I.STR, NODE, 1; POS; SSEQ) ELSE NULL
+              END ELSE ERRFLG = E.IDX.CORRUPT
+           REPEAT
+        END ELSE
+           ERRFLG = E.INDEX.EOF   ;* Index considered to be empty!
+        END
+     WHILE (ERRFLG AND NOT(ERRFLG = E.INDEX.EOF)) AND ROOT.CNT < MAX.RETRY DO
+        ROOT.CNT = ROOT.CNT + 1   ;* Inc local retry counter!
+        ERRFLG = FALSE            ;* Clear error flag
+     REPEAT
+     RETURN
+*
+* *************************************** *
+* Get _next_ 'MAX.IDS' entries from index *
+* *************************************** *
+4000*
+     LOOP WHILE KOUNT < MAX.IDS AND NOT(ERRFLG) DO
+        POS = POS + 1
+        LOOP WHILE POS > BPOS AND NOT(ERRFLG) DO
+           TEMP.T = NODE<3, 4>
+           IF TEMP.T > '' THEN
+              READ TEMP.NODE FROM F.INDX, PFX:TEMP.T THEN
+                 NODE = TEMP.NODE ; T = TEMP.T
+                 BPOS = NODE<3, 2> ; POS = 1
+              END ELSE
+*                Invoke 'error recovery' strategy! - Look for 'LAST.STR'
+*                entry for 'LAST.ID' again in index, then continue
+*                from that point!
+                 I.STR = LAST.STR
+                 GOSUB 2000
+                 IF FOUND THEN POS = POS + 1
+              END
+           END ELSE ERRFLG = E.INDEX.EOF
+        REPEAT
+*       'POS' points to next entry in 'NODE' to return!
+        IF NOT(ERRFLG) THEN
+           Z = MAX.IDS - KOUNT    ;* Number of keys yet to extract!
+           BEGIN CASE
+              CASE (POS + Z - 1) >= BPOS
+*                Grab _all_ remaining entries from this 'NODE' !
+                 Z1 = KOUNT + 1
+                 IF POS = 1 THEN
+                    IDLIST<1, Z1> = NODE<2>
+                    IDLIST<2, Z1> = NODE<1>
+                    IF MFLG THEN IDLIST<3, Z1> = NODE<4>
+                    KOUNT = KOUNT + BPOS
+                 END ELSE
+                    APOS = INDEX(NODE<2>, VM, POS-1)
+                    IDLIST<1, Z1> = NODE<2>[APOS+1, BIG.INT]
+                    APOS = INDEX(NODE<1>, VM, POS-1)
+                    IDLIST<2, Z1> = NODE<1>[APOS+1, BIG.INT]
+                    IF MFLG THEN
+                       APOS = INDEX(NODE<4>, VM, POS-1)
+                       IDLIST<3, Z1> = NODE<4>[APOS+1, BIG.INT]
+                    END
+                    KOUNT = KOUNT + (BPOS - POS + 1)
+                 END
+                 POS     = BPOS
+                 I.STR   = NODE<1, POS>
+                 LAST.ID = NODE<2, POS>
+              CASE Z > 1
+*                Cannot get _all_ remaining entries, but need > 1
+                 APOS = INDEX(NODE<2>, VM, Z+POS-1)
+                 IF POS > 1 THEN
+                    Z1 = INDEX(NODE<2>, VM, POS-1)
+                 END ELSE Z1 = 0
+                 IDLIST<1, KOUNT+1> = NODE<2>[Z1+1, APOS-Z1-1]
+                 APOS = INDEX(NODE<1>, VM, Z+POS-1)
+                 IF POS > 1 THEN
+                    Z1 = INDEX(NODE<1>, VM, POS-1)
+                 END ELSE Z1 = 0
+                 IDLIST<2, KOUNT+1> = NODE<1>[Z1+1, APOS-Z1-1]
+                 IF MFLG THEN
+                    APOS = INDEX(NODE<4>, VM, Z+POS-1)
+                    IF POS > 0 THEN
+                       Z1 = INDEX(NODE<4>, VM, POS-1)
+                    END ELSE Z1 = 0
+                    IDLIST<3, KOUNT+1> = NODE<4>[Z1+1, APOS-Z1-1]
+                 END
+                 POS     = POS + Z - 1
+                 KOUNT   = KOUNT + Z
+                 I.STR   = NODE<1, POS>
+                 LAST.ID = NODE<2, POS>
+              CASE 1
+*                Just get a single index entry
+                 KOUNT   = KOUNT + 1
+                 I.STR   = NODE<1, POS>
+                 LAST.ID = NODE<2, POS>
+                 IDLIST<1, KOUNT> = LAST.ID
+                 IDLIST<2, KOUNT> = I.STR
+                 IF MFLG THEN IDLIST<3, KOUNT> = NODE<4, POS>
+           END CASE
+           LAST.STR = I.STR
+        END
+     REPEAT
+     RETURN
+*
+* ******************************************* *
+* Get _previous_ 'MAX.IDS' entries from index *
+* ******************************************* *
+5000*
+     LOOP WHILE KOUNT < MAX.IDS AND NOT(ERRFLG) DO
+        POS = POS - 1
+        LOOP WHILE POS < 1 AND NOT(ERRFLG) DO
+           TEMP.T = NODE<3, 3>
+           IF TEMP.T > '' THEN
+              READ TEMP.NODE FROM F.INDX, PFX:TEMP.T THEN
+                 NODE = TEMP.NODE ; T = TEMP.T
+                 BPOS = NODE<3, 2> ; POS = BPOS
+              END ELSE
+*                Invoke 'error recovery' stategy! - Look for 'LAST.STR'
+*                entry for 'LAST.ID' again in index, then continue
+*                from that point!
+                 I.STR = LAST.STR
+                 GOSUB 2000
+                 POS = POS - 1
+              END
+           END ELSE ERRFLG = E.INDEX.EOF
+        REPEAT
+*       'POS' points to next entry in 'NODE' to return!
+        IF NOT(ERRFLG) THEN
+           Z = MAX.IDS - KOUNT    ;* Number of keys yet to extract!
+           BEGIN CASE
+              CASE Z > 1
+*                Invert item order as each key added to return list!
+                 Z1 = POS
+                 TEMP.NODE = NODE<2>
+                 IF MFLG THEN APOS = NODE<4>
+                 IF Z > Z1 THEN POS = 1 ELSE POS = POS - Z + 1
+                 FOR Z = Z1 TO POS STEP (-1)
+                    KOUNT = KOUNT + 1
+                    IDLIST<1, KOUNT> = TEMP.NODE<1, Z>
+                    IDLIST<2, KOUNT> = NODE<1, Z>
+                    IF MFLG THEN IDLIST<3, KOUNT> = APOS<1, Z>
+                 NEXT Z1
+                 I.STR   = NODE<1, POS>
+                 LAST.ID = NODE<2, POS>
+              CASE 1
+*                Just get a single index entry
+                 KOUNT   = KOUNT + 1
+                 I.STR   = NODE<1, POS>
+                 LAST.ID = NODE<2, POS>
+                 IDLIST<1, KOUNT> = LAST.ID
+                 IDLIST<2, KOUNT> = I.STR
+                 IF MFLG THEN IDLIST<3, KOUNT> = NODE<4, POS>
+           END CASE
+           LAST.STR = I.STR
+        END
+     REPEAT
+     RETURN
+*
+* ********************************************* *
+* Generate a active select list that represents *
+* the index tree at the current moment. This is *
+* currently coded for R83/AP style systems, and *
+* logic might be amended for other platforms.   *
+* We use the 'SELECT' processor in an effort to *
+* avoid creating large strings in Basic. This   *
+* large list items. This also avoids workspace  *
+* issues on R83.                                *
+* NOTE: We lock the tree during this function!  *
+* ********************************************* *
+6000*
+     T = PFX:ROOT.ID
+     LOOP
+        Z = FALSE
+        READU NODE FROM F.INDX, T LOCKED
+           Z = TRUE
+        END ELSE
+*          Assume index is empty!
+           RELEASE F.INDX, T
+           RETURN
+        END
+     WHILE Z DO REPEAT            ;* Repeat until we can lock index!
+*    We have 'locked' the tree while we build the select list. This means
+*    that we don't need any error recovery logic built into this process.
+     TREE.DEPTH = NODE<3, 7>      ;* Get tree depth from root
+     IF TREE.DEPTH = 1 THEN
+        Z1 = "QSELECT ":I.STR:" '":PFX:ROOT.ID:"'"
+     END ELSE
+*       Use some 'cunning stunts' with Access to build our list!
+*       Note that we avoid assuming any dictionary items exist.
+        TEMP.T = PFX:"CHILD.ID"   ;* Name of our temp dict item
+        Z = "A":AM:0:STR(AM, 6):"F;'":PFX:"';2;:":AM:"L":AM:10
+        WRITE Z ON F.INDX, TEMP.T
+        Z1 = "SELECT ":I.STR:" '":PFX:ROOT.ID:"' ":TEMP.T
+        Z1 = Z1:" USING ":I.STR:" (2"
+        EXECUTE Z1 CAPTURING Z
+        FOR I = 2 TO TREE.DEPTH-1
+           Z1 = "SELECT ":I.STR:" ":TEMP.T:" USING ":I.STR:" (2"
+           EXECUTE Z1 CAPTURING Z
+        NEXT I
+        Z1 = "QSELECT ":I.STR
+        DELETE F.INDX, TEMP.T     ;* Delete the temp dict item
+     END
+     Z1 = Z1:" (2"
+     EXECUTE Z1 CAPTURING CAPT    ;* Construct list of keys to return
+     RELEASE F.INDX, PFX:ROOT.ID  ;* Release lock on index!
+     RETURN
+*
+     END
