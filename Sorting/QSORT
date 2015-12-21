@@ -1,0 +1,155 @@
+SUBROUTINE QSORT(MODE, RECORD, ERR)
+* Sort a list of elements using QSORT    (dmm - from Andrew's book)
+* ******************************************************************** *
+* ******************************************************************** *
+* Sort a VM delimited list of strings. Max number of strings that      *
+* may be sorted by this function is limited by size of dimensioned     *
+* array 'VARS'.                                                        *
+*                                                                      *
+* Possible errors: 1 - Invalid sorting sequence defined                *
+*                  2 - Too many items to sort                          *
+*                                                                      *
+* Define local arrays. 'STACK' is used to prevent recursion, and       *
+* a size of 64 is quite enough to sort about 2gb items! The 'VARS'     *
+* array is used to perform the sort and should be set to the maximum   *
+* permissable data size.                                               *
+*                                                                      *
+* For this function to be 'viable', the platform on which it is        *
+* implemented should have the 'MATPARSE/BUILD' statements.             *
+*                                                                      *
+* Note that for sorts under about 2000 elements, it will most likely   *
+* be faster to use a sort based on a loop and a 'LOCATE' statement,    *
+* when array 'VARS' is dimensoned to 10000. If this is changed to 5000 *
+* the 'cross-over' point is much lower! - It seems there is quite an   *
+* overhead in setting up the array, and the array conversion. If this  *
+* sort could work on a passed dimensioned array, it might even be      *
+* faster than a locate based sort, even on smaller values of 'n'.      *
+* ******************************************************************** *
+* ******************************************************************** *
+*
+     EQU VM       TO  CHAR(253)
+     EQU AM       TO  CHAR(254)
+     EQU CUTOFF   TO  16       ;* Cutoff point to use 'insertsort'
+     EQU MAX.SORT TO  10000    ;* Max items we can sort
+     *
+     DIM STACK(64), VARS(10000)
+     *
+     * Validate sort type required, exit if unknown value!
+     *
+     BEGIN CASE
+        CASE MODE = 'AL'
+        CASE MODE = 'AR'
+        CASE MODE = 'DL'
+        CASE MODE = 'DR'
+        CASE 1 ; ERR = 1 ; RETURN
+     END CASE
+     ERR = 0                   ;* Initialise error flag
+     *
+     * Convert data to sort from dynamic to static array! Assign number
+     * of elements to sort to 'R' (right ptr) and set 'L' (left ptr)
+     * to an initial value of 1.
+     *
+     MATPARSE VARS FROM RECORD USING VM SETTING R
+     IF R = MAX.SORT THEN
+        IF INDEX(VARS(MAX.SORT), VM, 1) THEN
+           ERR = 2 ; RETURN    ;* Too many items!
+        END
+     END
+     RECORD = ''               ;* Relinquish some workspace!
+     L = 1                     ;* Initialise 'left' pointer
+     *
+     * All set, now do the sort!
+     *
+     P = 1                     ;* Initialise 'STACK' pointer
+     MORE = 0                  ;* Set TRUE to terminate sort
+     LOOP
+        DONE = 0
+        LOOP
+           IF (R - L >= CUTOFF) THEN
+              GOSUB 1000
+              IF (I - L > R - I) THEN
+                 STACK(P) = L
+                 P = P + 1
+                 STACK(P) = I - 1
+                 P = P + 1
+                 L = I + 1
+              END ELSE
+                 STACK(P) = I + 1
+                 P = P + 1
+                 STACK(P) = R
+                 P = P + 1
+                 R = I - 1
+              END
+           END ELSE
+              * For small partitions, use 'insertsort'!
+              GOSUB 2000
+              DONE = 1
+           END
+        UNTIL DONE DO REPEAT
+        IF P = 1 THEN
+           MORE = 1
+        END ELSE
+           P = P - 1
+           R = STACK(P)
+           P = P - 1
+           L = STACK(P)
+        END
+     UNTIL MORE DO REPEAT
+     *
+     * Convert sorted data back into dynamic array, and exit
+     *
+     MATBUILD RECORD FROM VARS USING VM
+     RETURN
+*
+* Partition, use 'median of three' partitioning
+*
+1000*
+     MID = INT((L + R) / 2) ;* Calculate 'midpoint'
+     LOCATE(VARS(L), VARS(MID), 1; RVAL; MODE) ELSE NULL
+     IF RVAL = 2 THEN T = VARS(L) ; VARS(L) = VARS(MID) ; VARS(MID) = T
+     LOCATE(VARS(L), VARS(R), 1; RVAL; MODE) ELSE NULL
+     IF RVAL = 2 THEN T = VARS(L) ; VARS(L) = VARS(R) ; VARS(R) = T
+     LOCATE(VARS(MID), VARS(R), 1; RVAL; MODE) ELSE NULL
+     IF RVAL = 2 THEN T = VARS(MID) ; VARS(MID) = VARS(R) ; VARS(R) = T
+     J = R - 1 ; T = VARS(MID) ; VARS(MID) = VARS(J) ; VARS(J) = T
+     I = L ; K = VARS(J) ; BUSY = 1
+     LOOP
+        LOOP
+           I = I + 1
+           LOCATE(VARS(I), K, 1; RVAL; MODE) THEN RVAL = 0
+        WHILE RVAL = 1 DO REPEAT
+        LOOP
+           J = J - 1
+           LOCATE(VARS(J), K, 1; RVAL; MODE) ELSE NULL
+        WHILE RVAL = 2 DO REPEAT
+        IF I >= J THEN
+           BUSY = 0
+        END ELSE
+           T = VARS(I) ; VARS(I) = VARS(J) ; VARS(J) = T
+        END
+     WHILE BUSY DO REPEAT
+     J = R - 1
+     T = VARS(I) ; VARS(I) = VARS(J) ; VARS(J) = T
+     RETURN
+*
+* For small partitions, use a sort based on 'insertsort'
+*
+2000*
+     FOR I = L + 1 TO R
+        T = VARS(I) ; K = I ; J = K - 1 ; BUSY = 1
+        LOOP WHILE BUSY AND K > 1 BUSY DO
+           LOCATE(T, VARS(J), 1; RVAL; MODE) THEN
+              BUSY = 0
+           END ELSE
+              IF RVAL = 1 THEN
+                 VARS(K) = VARS(J)
+                 K = K - 1
+                 J = J - 1
+              END ELSE BUSY = 0
+           END
+        REPEAT
+        VARS(K) = T
+     NEXT I
+     RETURN
+*
+     END
