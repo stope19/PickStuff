@@ -1,0 +1,291 @@
+SUBROUTINE EVAL.NUM.EXP(EXPRESS, RESULT, ERRFLG)
+* Evaluate numeric expression (dmm)
+* ****************************************************** *
+* ****************************************************** *
+* This function provides a simple numeric expression     *
+* evaluator. Input is in the form of an expression like: *
+*  123/(3.14 * 2)                                        *
+* If the expression is parsed ok, then it is evaluated.  *
+*                                                        *
+* Passed  : EXPRESS  - Expression to evaluate            *
+*                                                        *
+* Returned: RESULT   - Result of evaluating expression,  *
+*                      or 'null' if error found.         *
+*           ERRFLG   - Error flag. Returned as '0' if    *
+*                      all ok, else contains an error    *
+*                      message describing the problem.   *
+* ****************************************************** *
+* ****************************************************** *
+     *
+     EQU AM TO CHAR(254), VM TO CHAR(253), SPCE TO CHAR(32)
+     EQU TRUE TO 1, FALSE TO 0
+     *
+     DIM P.TABLE(24), JUMP.TO(24), ERRORS(12)
+     *
+     * Operators are evaluated left to right and are 'left associative'
+     * with a defined precedence of:      0  +- E    unary ops (highest)
+     *                                    1  E ^ E   exponentiation
+     *  NB: To change the '^' op to       2  E */ E  multiply or divide
+     *  be 'right associative', change    3  E +- E  add or subtract
+     *  P.TABLE(20)[6,1] from 'c' to 'L' and re-compile!
+     *
+     P.TABLE(1)  = "16F2C111IHG7";  P.TABLE(13) = "16F2C111IHG7"
+     P.TABLE(2)  = "~6323LKJ3337";  P.TABLE(14) = "463V3LKJ3337"
+     P.TABLE(3)  = "16F2C111IHG7";  P.TABLE(15) = "463W3LKJ3337"
+     P.TABLE(4)  = "16F2C111IHG7";  P.TABLE(16) = "463X3LKJ3337"
+     P.TABLE(5)  = "16F2C111IHG7";  P.TABLE(17) = "4M323LKJ3337"
+     P.TABLE(6)  = "16F2C111IHG7";  P.TABLE(18) = "aa3a3LKa3337"
+     P.TABLE(7)  = "5555D5555557";  P.TABLE(19) = "bb3b3Lbb3337"
+     P.TABLE(8)  = "5555E5555557";  P.TABLE(20) = "cc3c3ccc3337"
+     P.TABLE(9)  = "ff3f3fff3337";  P.TABLE(21) = "ee3e3eee3337"
+     P.TABLE(10) = "16F2C111IHG7";  P.TABLE(22) = "dd3d3ddd3337"
+     P.TABLE(11) = "16F2C111IHG7";  P.TABLE(23) = "gg3g3ggg3337"
+     P.TABLE(12) = "16F2C111IHG7";  P.TABLE(24) = "hh3h3hhh3337"
+     *
+     MAT JUMP.TO = ''
+     JUMP.TO(1) = 2;  JUMP.TO(5)  = 17; JUMP.TO(11) = 19
+     JUMP.TO(3) = 14; JUMP.TO(6)  = 21; JUMP.TO(12) = 20
+     JUMP.TO(4) = 15; JUMP.TO(10) = 18; JUMP.TO(13) = 16
+     *
+     BAD.TOKEN = 12             ;* Token 'type' used to force an error
+     OP.CODES  = AM:',)(^*/-+'  ;* Define operators for lexer
+     OP.PREC   = '9124567788'   ;* Operator types for lexer
+     UNARY.PRE.OPS = '125873'   ;* Lexer op types valid b4 unary ops
+     PROD.SIZE = '33332146'     ;* Lengths of grammar productions
+     *
+     FLIST = 'ABS':VM:'COS':VM:'EXP':VM:'INT':VM:'LN':VM:'NOT':VM:'RND'
+     FLIST = FLIST:VM:'SIN':VM:'SQRT':VM:'TAN':VM:'MOD':VM:'REM':VM:'PWR'
+     *
+     PLIST = '1111111111000'    ;* function 'type' offset. If 0 then funct.
+     *                          ;* has 2 params, if 1 then only 1 allowed.
+     *
+     ERRORS(1) = 'Missing operand'
+     ERRORS(2) = 'Unbalanced right parenthesis'
+     ERRORS(3) = 'Missing operator'
+     ERRORS(4) = 'Missing right parenthesis'
+     ERRORS(5) = 'Missing left parenthesis'
+     ERRORS(6) = 'illegal use of comma seperator'
+     ERRORS(7) = 'is an unknown function name'
+     ERRORS(8) = 'Divide by zero illegal'
+     ERRORS(9) = 'Square root of negative operand illegal'
+     ERRORS(10) = 'Argument for function must be greater than zero'
+     ERRORS(11) = 'Second argument for MOD must be greater than zero'
+     ERRORS(12) = 'Cannot raise a NEGATIVE number to a NON-INTEGER value'
+     *
+     *************************************************
+     * Parse the expression, and if no errors found, *
+     * evaluate it, and return the result.           *
+     *************************************************
+     *
+     RESULT = ''                ;* Initialise return value
+     ERRFLG = FALSE             ;* Assume no error!
+     EXPR = TRIM(EXPRESS)       ;* Clone input expression string
+     *
+     GOSUB 1000                 ;* Parse the expression
+     IF ERRFLG = FALSE THEN
+        GOSUB 2000              ;* Evaluate the expression
+     END
+     RETURN
+*     
+* ********************************************************** *
+* Now proceed with the parsing of the expression. We use an  *
+* 'LR' parser, with parsing tables 'P.TABLE()' & 'JUMP.TO()'.*
+* This function returns the parsed statement in RPN format   *
+* in variable 'OUTP', if all was ok, this function will exit *
+* with variable 'ERRFLG' still set to zero. Any other value  *
+* is seen as an indication of a parsing error.               *
+* ********************************************************** *
+1000* 
+     OP.TOP = 0
+     OP.STACK = ''; OUTP = ''
+     STACK = 1; CURR.PTR = 1; PREV.TYPE = 1; TOP = 1
+     *
+     QUIT = FALSE
+     LOOP
+        GOSUB 1500              ;* Get next token from input string!
+        LOOP
+           REDUCING = FALSE
+           STATE = STACK<TOP>
+           CELL = SEQ(P.TABLE(STATE)[TYPE, 1])
+           IF CELL < 97 THEN
+              IF CELL > 64 THEN
+                 *
+                 * Parser enters 'shift' state
+                 * 
+                 TOP = TOP + 1
+                 STACK<TOP> = CELL - 64
+                 IF NOT(INDEX('(,)', TOKEN, 1)) THEN
+                    OP.TOP = OP.TOP + 1
+                    OP.STACK<OP.TOP> = TOKEN
+                 END
+              END ELSE
+                 *
+                 * Error found! - Set 'ERRFLG' and exit
+                 *
+                 ERRFLG = CELL - 48
+                 IF ERRFLG > 6 THEN
+                    ERRFLG = "'":TOKEN:"' ":ERRORS(ERRFLG)
+                 END ELSE
+                    ERRFLG = ERRORS(ERRFLG)
+                 END
+                 QUIT = TRUE
+              END
+           END ELSE
+              IF CELL = 126 THEN
+                 *
+                 * All done! and all ok!
+                 *
+                 QUIT = TRUE
+              END ELSE
+                 *
+                 * Parser enters 'reduce' state.
+                 *
+                 REDUCING = TRUE
+                 PRODUCTION = CELL - 96
+                 IF PRODUCTION # 4 THEN
+                    OUTP<-1> = OP.STACK<OP.TOP>
+                    OP.TOP = OP.TOP - 1
+                 END
+                 TOP = TOP - PROD.SIZE[PRODUCTION, 1]
+                 STATE = STACK<TOP>
+                 TOP = TOP + 1
+                 STACK<TOP> = JUMP.TO(STATE)
+              END
+           END
+        WHILE REDUCING DO REPEAT
+     UNTIL QUIT DO REPEAT
+     RETURN
+*     
+* ********************************************** *
+* Get the next token from the expression. Return *
+* in variable 'TOKEN', and its type in 'TYPE'. A *
+* type code of 'BAD.TOKEN' indicates an error.   *
+* ********************************************** *
+1500*
+     LOOP
+        LOOP
+           CH = EXPR[CURR.PTR, 1]
+        WHILE (CH = SPCE) DO CURR.PTR = CURR.PTR + 1 REPEAT
+        TYPE = OP.PREC[INDEX(OP.CODES, CH, 1) + 1, 1]
+        IF TYPE = 9 THEN
+           OLD.PTR = CURR.PTR
+           LOOP
+              CURR.PTR = CURR.PTR + 1
+              CH = EXPR[CURR.PTR, 1]
+           WHILE NOT(INDEX(OP.CODES, CH, 1) OR CH = SPCE) DO REPEAT
+           TOKEN = EXPR[OLD.PTR, CURR.PTR - OLD.PTR]
+           IF NOT(NUM(TOKEN)) THEN
+              TOKEN = OCONV(TOKEN, "MCU")
+              LOCATE(TOKEN, FLIST, 1; POS) THEN
+                 TYPE = PLIST[POS, 1] + 10
+              END ELSE
+                 * Error! - invalid function name!
+                 TYPE = BAD.TOKEN
+              END
+           END
+        END ELSE
+           IF TYPE = 8 THEN
+              IF INDEX(UNARY.PRE.OPS, PREV.TYPE, 1) THEN
+                 IF CH = '-' THEN
+                    CH = '@'    ;* Unary minus
+                 END ELSE
+                    * This must be a unary plus. Ignore, and get next token!
+                    CH = VM
+                 END
+                 TYPE = 3       ;* Change 'TYPE' to 'unary' token type!
+              END
+           END
+           CURR.PTR = CURR.PTR + 1
+           TOKEN = CH
+        END
+        PREV.TYPE = TYPE
+     WHILE CH = VM DO REPEAT
+     RETURN
+*     
+* **************************************************** *
+* We now have a valid parsed expression in RPN format. *
+* This is easily evaluated using a 'stack machine'.    *
+* Calculate result, and place into variable 'RESULT'.  *
+* **************************************************** *
+2000*
+     POS = 0
+     STACK = ''
+     LOOP
+        POS = POS + 1
+        TOKEN = OUTP<POS>
+     WHILE TOKEN > '' DO
+        BEGIN CASE
+           CASE TOKEN = '+'
+                STACK<TOP-1> = STACK<TOP-1> + STACK<TOP>
+                TOP = TOP - 1
+           CASE TOKEN = '-'
+                STACK<TOP-1> = STACK<TOP-1> - STACK<TOP>
+                TOP = TOP - 1
+           CASE NUM(TOKEN)
+                TOP = TOP + 1
+                STACK<TOP> = TOKEN
+           CASE TOKEN = '*'
+                STACK<TOP-1> = STACK<TOP-1> * STACK<TOP>
+                TOP = TOP - 1
+           CASE TOKEN = '/'
+                IF STACK<TOP> = 0 THEN
+                   * Error - attempted divide by zero!
+                   ERRFLG = ERRORS(8)
+                   RETURN
+                END
+                STACK<TOP-1> = STACK<TOP-1> / STACK<TOP>
+                TOP = TOP - 1
+           CASE TOKEN = '@'
+                STACK<TOP> = STACK<TOP> * (-1)
+           CASE TOKEN = 'ABS'
+                STACK<TOP> = ABS(STACK<TOP>)
+           CASE TOKEN = 'COS'
+                STACK<TOP> = COS(STACK<TOP>)
+           CASE TOKEN = 'EXP'
+                STACK<TOP> = EXP(STACK<TOP>)
+           CASE TOKEN = 'INT'
+                STACK<TOP> = INT(STACK<TOP>)
+           CASE TOKEN = 'LN'
+                IF STACK<TOP> <= 0 THEN
+                   * Error - Value for LN() must be >= 0 !
+                   ERRFLG = ERRORS(10)
+                   RETURN
+                END
+                STACK<TOP> = LN(STACK<TOP>)
+           CASE TOKEN = 'NOT'
+                STACK<TOP> = NOT(STACK<TOP>)
+           CASE TOKEN = 'RND'
+                STACK<TOP> = RND(STACK<TOP>)
+           CASE TOKEN = 'SIN'
+                STACK<TOP> = SIN(STACK<TOP>)
+           CASE TOKEN = 'SQRT'
+                IF STACK<TOP> < 0 THEN
+                   * Error - Square root of negative operand illegal!
+                   ERRFLG = ERRORS(9)
+                   RETURN
+                END
+                STACK<TOP> = SQRT(STACK<TOP>)
+           CASE TOKEN = 'TAN'
+                STACK<TOP> = TAN(STACK<TOP>)
+           CASE TOKEN = 'MOD' OR TOKEN = 'REM'
+                * Error - Second argument for MOD must be greater than zero!
+                IF STACK<TOP> = 0 THEN
+                   ERRFLG = ERRORS(11)
+                   RETURN
+                END
+                STACK<TOP-1> = MOD(STACK<TOP-1>, STACK<TOP>)
+                TOP = TOP - 1
+           CASE TOKEN = 'PWR' OR TOKEN = '^'
+                IF STACK<TOP-1> < 0 AND STACK<TOP> # INT(STACK<TOP>) THEN
+                   * Error - Cannot raise a NEGATIVE number to a NON-INTEGER value
+                   ERRFLG = ERRORS(12)
+                   RETURN
+                END
+                STACK<TOP-1> = PWR(STACK<TOP-1>, STACK<TOP>)
+                TOP = TOP - 1
+        END CASE
+     REPEAT
+     RESULT = STACK<TOP>        ;* Extract final result!
+     RETURN
+*     
+     END
