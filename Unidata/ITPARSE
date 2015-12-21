@@ -1,0 +1,1108 @@
+SUBROUTINE ITPARSE(F.DICT, EXPR, OSTK, ERR, ERR.PARAM)
+* ********************************************************************* *
+* Parser for UniData 'I' type virtual fields.                           *
+*                                                                       *
+* Attribute names. A name must reference another attribute definition   *
+* item that exists in the same dictionary file. This may be either a    *
+* 'D' type definition, or another virtual definition.                   *
+*                                                                       *
+* Constants and literal strings. All non numeric constants must appear  *
+* within single or double quotation marks.                              *
+*                                                                       *
+* Variables. Unidata provides numerous '@variables' that can reference  *
+* system information.                                                   *
+*                                                                       *
+* IF/THEN/ELSE construct. Note that both the THEN and ELSE clause are   *
+* required. Note also that nested IF statements are allowed.            *
+*                                                                       *
+* Logical operators AND/OR                                              *
+*                                                                       *
+* Relational operators >, <, =, # ...etc                                *
+*                                                                       *
+* ********************************************************************* *
+   *
+   EQU IN.DEBUG TO 1           ;* Debug flag. (set to 0 for release!)
+   *
+   EQU TRUE TO 1, FALSE TO 0
+   EQU TAB TO CHAR(9), LF TO CHAR(10), SPCE TO CHAR(32), EOI TO CHAR(250)
+   *
+   * Lexer phase errors
+   *
+   EQU ERR.NO.ERROR     TO 0   ;* No error.
+   EQU ERR.BAD.CHAR     TO 1   ;* Invalid character
+   EQU ERR.BAD.QUOTE    TO 2   ;* Missing quote character
+   EQU ERR.BAD.FUNC     TO 3   ;* Unknown function name
+   EQU ERR.BAD.ATNAME   TO 4   ;* Unknown @var name
+   EQU ERR.BAD.SUBSTR   TO 5   ;* Mis-matched '[' & ']' chars
+   EQU ERR.BAD.NULLTEST TO 6   ;* Bad 'IS NULL' or 'IS NOT NULL' clause
+   EQU ERR.BAD.DITEM    TO 7   ;* Missing/invalid dict item
+   EQU ERR.BAD.RECCUR   TO 8   ;* Recursive dict item reference!
+   EQU ERR.BAD.SYNTAX   TO 9   ;* Bad dictionary item syntax
+   EQU ERR.BAD.RPAREN   TO 10  ;* Missing right parentheses
+   *
+   * Parser phase errors
+   *
+   EQU ERR.PARSER.ERR   TO 99  ;* Generic parser error
+   EQU ERR.NO.OPERAND   TO 100 ;* Missing operand
+   EQU ERR.UNBAL.RPAREN TO 101 ;* Unbalanced right parentheses
+   EQU ERR.MISSING.OP   TO 102 ;* Missing operator
+   EQU ERR.NO.RPAREN    TO 103 ;* Missing right parentheses
+   EQU ERR.NO.LPAREN    TO 104 ;* Missing left parentheses
+   EQU ERR.BAD.COMMA    TO 105 ;* Invalid use of comma separator
+   EQU ERR.BAD.IF       TO 106 ;* Invalid IF/THEN/ELSE construct
+   EQU ERR.NO.THEN      TO 107 ;* Missing THEN clause
+   EQU ERR.NO.ELSE      TO 108 ;* Missing ELSE clause
+   EQU ERR.PARAM.COUNT  TO 109 ;* Invalid function parameter count
+   EQU ERR.BAD.ATNUM    TO 110 ;* Invalid '@nn' ref. ('nn' not seen yet!)
+   *
+   * Parser token 'types'
+   *
+   EQU TYPE.NESTBEG     TO 0
+   EQU TYPE.ID          TO 1
+   EQU TYPE.LOGOP       TO 2
+   EQU TYPE.RELOP       TO 3
+   EQU TYPE.CATOP       TO 4
+   EQU TYPE.ADDOP       TO 5
+   EQU TYPE.MULOP       TO 6
+   EQU TYPE.UNARYOP     TO 7
+   EQU TYPE.EXPOP       TO 8
+   EQU TYPE.FUNC        TO 9
+   EQU TYPE.BFUNC       TO 10
+   EQU TYPE.OPAREN      TO 11
+   EQU TYPE.CPAREN      TO 12
+   EQU TYPE.COMMA       TO 13
+   EQU TYPE.IF          TO 14
+   EQU TYPE.THEN        TO 15
+   EQU TYPE.ELSE        TO 16
+   EQU TYPE.EOF         TO 17
+   *
+   * Token codes. Used to represent data and actions.
+   *
+   EQU TOK.PLUS         TO 1
+   EQU TOK.MINUS        TO 2
+   EQU TOK.MULT         TO 3
+   EQU TOK.DIVIDE       TO 4
+   EQU TOK.EXP          TO 5
+   EQU TOK.UPLUS        TO 6
+   EQU TOK.UMINUS       TO 7
+   EQU TOK.EQ           TO 8
+   EQU TOK.NE           TO 9
+   EQU TOK.GT           TO 10
+   EQU TOK.LT           TO 11
+   EQU TOK.GE           TO 12
+   EQU TOK.LE           TO 13
+   EQU TOK.MATCHES      TO 14
+   EQU TOK.OR           TO 15
+   EQU TOK.AND          TO 16
+   EQU TOK.CAT          TO 17
+   EQU TOK.STRING       TO 18
+   EQU TOK.SVAR         TO 19
+   EQU TOK.NUMBER       TO 20
+   EQU TOK.ATVAR        TO 21
+   EQU TOK.FUNC         TO 22
+   EQU TOK.BFUNC        TO 23
+   EQU TOK.IF           TO 24
+   EQU TOK.ATSTORE      TO 25
+   EQU TOK.ATLOAD       TO 26
+   EQU TOK.EXPSTORE     TO 27
+   EQU TOK.EXPLOAD      TO 28
+   * Tokens below here do NOT appear in output!
+   EQU TOK.OPAREN       TO 29
+   EQU TOK.CPAREN       TO 30
+   EQU TOK.THEN         TO 31
+   EQU TOK.ELSE         TO 32
+   EQU TOK.COMMA        TO 33
+   EQU TOK.SEMI         TO 34
+   EQU TOK.EOF          TO 35
+   EQU TOK.NESTBEG      TO 36
+   EQU TOK.NESTEND      TO 37
+   *
+   * List of valid chars for 'name' tokens.
+   *
+   EQU CLIST TO "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789$._abcdefghijklmnopqrstuvwxyz"
+   *
+   * Internal function token values. There must be an 'op-code' value
+   * for each of these in variable 'BF.OPCODE'. The absolute value of the
+   * equated variable is used to find the op-code in 'BF.OPCODE'.
+   *
+   EQU BFUNC.ISNOTNULL  TO -1
+   EQU BFUNC.ISNULL     TO -2
+   EQU BFUNC.SUBSTR     TO -3
+   *
+   COMMON /IT$PARS/ BF.OPCODE, ALPHA.OPS(3), ALIST, AT.OPCODE, DUPLIST
+   COMMON /IT$PARS/ FLIST(3), F.OPCODE, PTAB(31), PJMP(31), PROD.SIZE
+   COMMON /IT$PARS/ PROD.PAREN, PROD.FUNC
+   *
+   IF UNASSIGNED(BF.OPCODE) THEN
+      *
+      * *** One time only initialisation! ***
+      *
+      * Op code list for internal functions. Sequential numbers from 100.
+      *
+      BF.OPCODE = 100:@AM:101:@AM:102
+      *
+      * List of alpha operators, and associated token codes.
+      *
+      ALPHA.OPS(1)     = "MATCH":@AM:"MATCHES":@AM:"EQ":@AM:"NE":@AM:"GT"
+      ALPHA.OPS(1)<-1> = "LT":@AM:"GE":@AM:"LE":@AM:"AND":@AM:"OR":@AM:"CAT"
+      ALPHA.OPS(1)<-1> = "IF":@AM:"THEN":@AM:"ELSE"
+      *
+      ALPHA.OPS(2)     = TOK.MATCHES:@AM:TOK.MATCHES:@AM:TOK.EQ:@AM:TOK.NE
+      ALPHA.OPS(2)<-1> = TOK.GT:@AM:TOK.LT:@AM:TOK.GE:@AM:TOK.LE:@AM:TOK.AND
+      ALPHA.OPS(2)<-1> = TOK.OR:@AM:TOK.CAT:@AM:TOK.IF:@AM:TOK.THEN:@AM:TOK.ELSE
+      *
+      ALPHA.OPS(3)     = TYPE.RELOP:@AM:TYPE.RELOP:@AM:TYPE.RELOP:@AM:TYPE.RELOP
+      ALPHA.OPS(3)<-1> = TYPE.RELOP:@AM:TYPE.RELOP:@AM:TYPE.RELOP:@AM:TYPE.RELOP
+      ALPHA.OPS(3)<-1> = TYPE.LOGOP:@AM:TYPE.LOGOP:@AM:TYPE.CATOP:@AM:TYPE.IF
+      ALPHA.OPS(3)<-1> = TYPE.THEN:@AM:TYPE.ELSE
+      *
+      * '@'varname variable list. No duplicates permitted. (5 per line)
+      *
+      ALIST     = "DATE":@AM:"DAY":@AM:"FILE.NAME":@AM:"FM":@AM:"ID"
+      ALIST<-1> = "IM":@AM:"ITEM.COUNT":@AM:"MONTH":@AM:"NS":@AM:"NV"
+      ALIST<-1> = "RECORD":@AM:"RM":@AM:"SM":@AM:"SUBVALUE.COUNT":@AM:"SYSTEM.RETURN.CODE"
+      ALIST<-1> = "TIME":@AM:"TM":@AM:"USER.NO":@AM:"USERNAME":@AM:"VALUE.COUNT"
+      ALIST<-1> = "VM":@AM:"YEAR"
+      *
+      * Op code list for '@' variable list. Sequential numbers from 200.
+      *
+      AT.OPCODE     = 200:@AM:201:@AM:202:@AM:203:@AM:204
+      AT.OPCODE<-1> = 205:@AM:206:@AM:207:@AM:208:@AM:209
+      AT.OPCODE<-1> = 210:@AM:205:@AM:211:@AM:208:@AM:212
+      AT.OPCODE<-1> = 213:@AM:214:@AM:215:@AM:216:@AM:209
+      AT.OPCODE<-1> = 217:@AM:218
+      *
+      * List of 'synonym' function names. The synonym name is in value 1,
+      * and the corresponding 'real' name (ie: name that will appear in
+      * FLIST(1) is in value 2.
+      *
+      DUPLIST    = "ISNULL":@VM:"POWER":@VM:"SUBSTRING":@VM:"UPPER"
+      DUPLIST<2> = "ISNVS" :@VM:"PWR"  :@VM:"SUBSTR"   :@VM:"UPCASE"
+      *
+      * Intrinsic function list. Some duplicated functionality exists. The
+      * duplicate names (ie: 'synonyms' are listed in variable DUPLIST)
+      * Note: There are 5 functions per row, except maybe for last row.
+      * FLIST(1) is the delimited list of function names, FLIST(2) is the
+      * corresponding list of _required_ parameters, and FLIST(3) is the
+      * corresponding list of _optional_ parameters. F.OPCODE<n> contains
+      * the op-code emitted for each function.
+      *
+      FLIST(1)     = "ABS":@AM:"ACOS":@AM:"ADD_MONTHS":@AM:"ASCII":@AM:"ASIN"
+      FLIST(1)<-1> = "ATAN":@AM:"CHAR":@AM:"COL1":@AM:"COL2":@AM:"CONVERT"
+      FLIST(1)<-1> = "COS":@AM:"COUNT":@AM:"DATE":@AM:"DCOUNT":@AM:"DOWNCASE"
+      FLIST(1)<-1> = "EBCDIC":@AM:"EXP":@AM:"EXTRACT":@AM:"FIELD":@AM:"FMT"
+      FLIST(1)<-1> = "ICONV":@AM:"INDEX":@AM:"INITCAP":@AM:"INSTR":@AM:"INT"
+      FLIST(1)<-1> = "ISNULL":@AM:"ISNV":@AM:"LAST_DAY":@AM:"LEN":@AM:"LENGTH"
+      FLIST(1)<-1> = "LN":@AM:"LOWER":@AM:"LPAD":@AM:"MATCHFIELD":@AM:"MOD"
+      FLIST(1)<-1> = "MONTHS_BETWEEN":@AM:"N":@AM:"NEXT_DAY":@AM:"NOT":@AM:"NUM"
+      FLIST(1)<-1> = "OCONV":@AM:"PWR":@AM:"RAISE":@AM:"REUSE":@AM:"RND"
+      FLIST(1)<-1> = "ROUND":@AM:"RPAD":@AM:"SEQ":@AM:"SIGN":@AM:"SIN"
+      FLIST(1)<-1> = "SOUNDEX":@AM:"SPACE":@AM:"SQRT":@AM:"STR":@AM:"SUBR"
+      FLIST(1)<-1> = "SUBSTR":@AM:"SUM":@AM:"TAN":@AM:"TIME":@AM:"TIMEDATE"
+      FLIST(1)<-1> = "TOTAL":@AM:"TRANS":@AM:"TRIM":@AM:"TRIMB":@AM:"TRIMF"
+      FLIST(1)<-1> = "TRUNC":@AM:"UPCASE":@AM:"USER_ID":@AM:"USER_NAME"
+      *
+      * Number of _required_ parameters for function.
+      *
+      FLIST(2)     = 1:@AM:1:@AM:2:@AM:1:@AM:1
+      FLIST(2)<-1> = 1:@AM:1:@AM:0:@AM:0:@AM:3
+      FLIST(2)<-1> = 1:@AM:2:@AM:0:@AM:2:@AM:1
+      FLIST(2)<-1> = 1:@AM:1:@AM:3:@AM:3:@AM:2
+      FLIST(2)<-1> = 2:@AM:3:@AM:1:@AM:4:@AM:1
+      FLIST(2)<-1> = 1:@AM:1:@AM:1:@AM:1:@AM:1
+      FLIST(2)<-1> = 1:@AM:1:@AM:3:@AM:3:@AM:2
+      FLIST(2)<-1> = 2:@AM:1:@AM:2:@AM:1:@AM:1
+      FLIST(2)<-1> = 2:@AM:2:@AM:1:@AM:1:@AM:1
+      FLIST(2)<-1> = 2:@AM:3:@AM:1:@AM:1:@AM:1
+      FLIST(2)<-1> = 1:@AM:1:@AM:1:@AM:2:@AM:1
+      FLIST(2)<-1> = 2:@AM:1:@AM:1:@AM:0:@AM:0
+      FLIST(2)<-1> = 1:@AM:4:@AM:1:@AM:1:@AM:1
+      FLIST(2)<-1> = 1:@AM:1:@AM:0:@AM:0
+      *
+      * Number of _optional_ parameters (in addition to _required_ count).
+      * A value of -1 here indicates any number of parameters (in addition
+      * to any required number) is allowed.
+      *
+      FLIST(3)     = 0:@AM:0:@AM:0:@AM:0:@AM:0
+      FLIST(3)<-1> = 0:@AM:0:@AM:0:@AM:0:@AM:0
+      FLIST(3)<-1> = 0:@AM:0:@AM:0:@AM:0:@AM:0
+      FLIST(3)<-1> = 0:@AM:0:@AM:1:@AM:1:@AM:0
+      FLIST(3)<-1> = 0:@AM:0:@AM:0:@AM:0:@AM:0
+      FLIST(3)<-1> = 0:@AM:0:@AM:0:@AM:0:@AM:0
+      FLIST(3)<-1> = 0:@AM:0:@AM:0:@AM:0:@AM:0
+      FLIST(3)<-1> = 0:@AM:0:@AM:0:@AM:0:@AM:0
+      FLIST(3)<-1> = 0:@AM:0:@AM:0:@AM:0:@AM:0
+      FLIST(3)<-1> = 0:@AM:0:@AM:0:@AM:0:@AM:0
+      FLIST(3)<-1> = 0:@AM:0:@AM:0:@AM:0:@AM:-1
+      FLIST(3)<-1> = 1:@AM:0:@AM:0:@AM:0:@AM:0
+      FLIST(3)<-1> = 0:@AM:0:@AM:0:@AM:0:@AM:0
+      FLIST(3)<-1> = 1:@AM:0:@AM:0:@AM:0
+      *
+      * List of op-codes for each function in FLIST(1). Op-codes are
+      * sequential numbers from 400.
+      *
+      F.OPCODE     = 400:@AM:401:@AM:402:@AM:403:@AM:404
+      F.OPCODE<-1> = 405:@AM:406:@AM:407:@AM:408:@AM:409
+      F.OPCODE<-1> = 410:@AM:411:@AM:412:@AM:413:@AM:414
+      F.OPCODE<-1> = 415:@AM:416:@AM:417:@AM:418:@AM:419
+      F.OPCODE<-1> = 420:@AM:421:@AM:422:@AM:423:@AM:424
+      F.OPCODE<-1> = 425:@AM:426:@AM:427:@AM:428:@AM:429
+      F.OPCODE<-1> = 430:@AM:431:@AM:432:@AM:433:@AM:434
+      F.OPCODE<-1> = 435:@AM:436:@AM:437:@AM:438:@AM:439
+      F.OPCODE<-1> = 440:@AM:441:@AM:442:@AM:443:@AM:444
+      F.OPCODE<-1> = 445:@AM:446:@AM:447:@AM:448:@AM:449
+      F.OPCODE<-1> = 450:@AM:451:@AM:452:@AM:453:@AM:454
+      F.OPCODE<-1> = 455:@AM:456:@AM:457:@AM:458:@AM:459
+      F.OPCODE<-1> = 460:@AM:461:@AM:462:@AM:463:@AM:464
+      F.OPCODE<-1> = 465:@AM:466:@AM:467:@AM:468
+      *
+      * Define parser table.
+      *
+      PTAB(1)  = "C11111D1E1F26G77~" ; PTAB(17) = "3HIJKL3M3E3RP3771"
+      PTAB(2)  = "3HIJKL3M3E326377~" ; PTAB(18) = "3ccccc3c0c3cc3ccc"
+      PTAB(3)  = "3aaaaa3aaa3aa3aaa" ; PTAB(19) = "3HIJKL3M3E3T63774"
+      PTAB(4)  = "C11111D1E1F26G771" ; PTAB(20) = "3ddddd3ddd3dd3ddd"
+      PTAB(5)  = "C11111D1E1FR6G774" ; PTAB(21) = "3HIJKL3M3E3268V88"
+      PTAB(6)  = "C11111D1E1F16G771" ; PTAB(22) = "C11111D1E1F26G717"
+      PTAB(7)  = "C11111D1E1F26G171" ; PTAB(23) = "3HIJKL3M3E32699X9"
+      PTAB(8)  = "C11111D1E1F26G771" ; PTAB(24) = "C11111D1E1F26G171"
+      PTAB(9)  = "C11111D1E1F26G771" ; PTAB(25) = "3HIJKL3M3E326eeee"
+      PTAB(10) = "C11111D1E1F26G771" ; PTAB(26) = "3fIJKL3M3E3ff3fff"
+      PTAB(11) = "C11111D1E1F26G771" ; PTAB(27) = "3g3JKL3M3E3gg3ggg"
+      PTAB(12) = "C11111D1E1F26G771" ; PTAB(28) = "3hhhKL3M3E3hh3hhh"
+      PTAB(13) = "C11111D1E1F26G771" ; PTAB(29) = "3iiiiL3M3E3ii3iii"
+      PTAB(14) = "3bbbbL3M3E3bb3bbb" ; PTAB(30) = "3jjjjj3M3E3jj3jjj"
+      PTAB(15) = "3HIJKL3M3E3RP3774" ; PTAB(31) = "3kkkkk3M3E3kk3kkk"
+      PTAB(16) = "C11111D1E1F11G771"
+      *
+      MAT PJMP = -1 ;* Initialise jump table to 'error'
+      *
+      PJMP(1) = 2  ; PJMP(10) = 28
+      PJMP(4) = 14 ; PJMP(11) = 29
+      PJMP(5) = 15 ; PJMP(12) = 30
+      PJMP(6) = 19 ; PJMP(13) = 31
+      PJMP(7) = 21 ; PJMP(16) = 17
+      PJMP(8) = 26 ; PJMP(22) = 23
+      PJMP(9) = 27 ; PJMP(24) = 25
+      *
+      PROD.SIZE  = '12036333333'  ;* Lengths of grammar productions
+      PROD.PAREN = 4              ;* Production for '(E)'
+      PROD.FUNC  = 3              ;* Production for 'function([e[,e]...])'
+   END
+   *
+   ERR = ERR.NO.ERROR   ;* Assume no error
+   ERR.PARAM = ''       ;* Clear error info variable
+   SVAL = EXPR          ;* Clone expression to parse
+   OSTK = ''            ;* Initialise intermediate code return variable
+   *
+* ***************************************************************** *
+* Split expression up into component pieces. Do some 'massaging' of *
+* data elements to make life easier for the parser phase. Return a  *
+* list of expression 'tokens' and associated 'type' codes. If any   *
+* error, will set the variable 'ERR' on return. Pass expression to  *
+* this function in variable 'SVAL'                                  *
+* If no error, return 3 variables:                                  *
+*   OPTR = count of VM delimited values in OUTP and OUTT            *
+*   OUTP = VM'd list of tokens                                      *
+*   OUTT = VM'd list of parser 'types'                              *
+* ***************************************************************** *
+   *
+   PREV.TYPE = TYPE.EOF ; IDLIST = "" ; DCACHE = ""
+   OUTP = "" ; OUTT = "" ; DEPTH = 1 ; SCRPTR = 0
+   SPOS = 0 ; BCNT = 0 ; OPTR = 0 ; ATLIST = '' ; ATPTR = 0
+   LOOP
+      LOOP
+         SPOS = SPOS + 1
+         CH = SVAL[SPOS, 1]
+      WHILE CH > '' AND CH <= SPCE DO
+         * Ignore 'whitespace'
+         IF NOT(CH = SPCE OR CH = TAB OR CH = LF) THEN
+            ERR = ERR.BAD.CHAR
+            ERR.PARAM = CH
+            RETURN
+         END
+      REPEAT
+   WHILE CH > '' DO
+      * We have a 'non-whitespace' character!
+      BEGIN CASE
+         CASE CH = "'" OR CH = '"'
+            * Literal string
+            TYPE  = TYPE.ID
+            POS = SPOS
+            SH = CH
+            LOOP
+               SPOS = SPOS + 1
+               CH = SVAL[SPOS, 1]
+            UNTIL CH = SH OR CH = '' DO REPEAT
+            IF CH = '' THEN
+               * Error - missing quote char!
+               ERR = ERR.BAD.QUOTE
+               ERR.PARAM = SH
+               RETURN
+            END
+            Z = 0                         ;* String has 'tokens' flag
+            VAL = SVAL[POS+1, SPOS-POS-1] ;* String minus quote chars
+            * Problem. The string value _may_ contain system delimiter
+            * characters. If left 'as is', this will stuff up the
+            * parser, so we need to convert these to 'tokens'. Append
+            * a 'flag byte' as the 3rd sub-value in the final token
+            * string. At runtime, this flag tells us if tokens present.
+            IF INDEX(VAL, @VM, 1) THEN
+               SWAP @VM WITH "%FD" IN VAL
+!VAL = CHANGE(VAL, @VM, '%FD')
+               Z = Z + 1
+            END
+            IF INDEX(VAL, @SVM, 1) THEN
+               SWAP @SVM WITH "%FC" IN VAL
+!VAL = CHANGE(VAL, @SVM, '%FC')
+               Z = Z + 2
+            END
+            TOKEN = TOK.STRING:@SVM:VAL:@SVM:Z
+         CASE CH MATCHES "1N"
+            TYPE = TYPE.ID
+            POS = SPOS
+            LOOP
+               SPOS = SPOS + 1
+               CH = SVAL[SPOS, 1]
+            WHILE CH MATCHES "1N" OR CH = '.' DO REPEAT
+            TOKEN = TOK.NUMBER:@SVM:SVAL[POS, SPOS-POS]
+            SPOS = SPOS - 1 ;* Back up from terminator
+         CASE CH = '@'
+            * '@variable' name/number
+            SPOS = SPOS + 1
+            CH = SVAL[SPOS, 1]
+            POS = SPOS
+            IF CH MATCHES "1N" THEN
+               LOOP
+                  SPOS = SPOS + 1
+                  CH = SVAL[SPOS, 1]
+               WHILE CH MATCHES "1N" DO REPEAT
+               Z = SVAL[POS, SPOS-POS]
+               IF Z > (ATPTR - ATLIST<1>) OR Z < 1 THEN
+                  * Invalid '@nn' reference! Maybe forward ref?
+                  ERR.PARAM = '@':SVAL[POS, SPOS-POS]
+                  ERR = ERR.BAD.ATNUM
+                  RETURN
+               END
+               TOKEN = TOK.ATLOAD:@SVM:Z
+            END ELSE
+               LOOP
+                  SPOS = SPOS + 1
+                  CH = SVAL[SPOS, 1]
+               WHILE CH > '' AND INDEX(CLIST, CH, 1) DO REPEAT
+               TOKEN = OCONV(SVAL[POS, SPOS-POS], 'MCU')
+               LOCATE(TOKEN, ALIST; POS) ELSE
+                  * Error - unknown @var name!
+                  ERR = ERR.BAD.ATNAME
+                  ERR.PARAM = TOKEN
+                  RETURN
+               END
+               TOKEN = TOK.ATVAR:@SVM:AT.OPCODE<POS>
+            END
+            TYPE = TYPE.ID
+            SPOS = SPOS - 1 ;* Back up from terminator
+         CASE CH = '{' OR INDEX(CLIST, CH, 1)
+            STARTPOS = SPOS ; SH = CH
+            ISNAME = FALSE ; TYPE = ''
+            LOOP
+               SPOS = SPOS + 1
+               CH = SVAL[SPOS, 1]
+            WHILE CH > '' AND INDEX(CLIST, CH, 1) DO REPEAT
+            IF SH = '{' THEN
+               IF CH # '}' THEN
+                  * Error - miss matched '{ }' quote chars!
+                  ERR = ERR.BAD.QUOTE
+                  ERR.PARAM = '}'
+                  RETURN
+               END
+               ISNAME = TRUE
+               TOKEN = SVAL[STARTPOS + 1, SPOS - STARTPOS - 1]
+            END ELSE
+               TOKEN = SVAL[STARTPOS, SPOS - STARTPOS]
+               NCH = OCONV(TOKEN, 'MCU')
+               IF CH > '' THEN
+                  * Find next non-whitespace character!
+                  LOOP WHILE CH = SPCE OR CH = TAB OR CH = LF DO
+                     SPOS = SPOS + 1
+                     CH = SVAL[SPOS, 1]
+                  REPEAT
+                  IF CH = '(' THEN
+                     TYPE = TYPE.FUNC ; TOKEN = ''
+                     * Assume this is a function name!
+                     LOCATE(NCH, FLIST(1); POS) THEN
+                        TOKEN = TOK.FUNC:@SVM:POS
+                     END ELSE
+                        LOCATE(NCH, DUPLIST, 1; POS) THEN
+                           LOCATE(DUPLIST<2, POS>, FLIST(1); POS) THEN
+                              TOKEN = TOK.FUNC:@SVM:POS
+                              NCH = FLIST(1)<POS>
+                           END
+                        END
+                        IF TOKEN = '' THEN
+                           * Error - unknown function!
+                           ERR = ERR.BAD.FUNC
+                           ERR.PARAM = NCH
+                           RETURN
+                        END
+                     END
+                     IF NCH = 'N' THEN
+                        * This is a 'special case' syntax with the form
+                        * N(name) where 'name' is the name of a dict item.
+                        Z = SPOS + 1   ;* First char of name!
+                        LOOP
+                           SPOS = SPOS + 1
+                           CH = SVAL[SPOS, 1]
+                        UNTIL CH = ')' OR CH = '' DO REPEAT
+                        IF CH = '' THEN
+                           * Error - missing ')' character!
+                           ERR = ERR.BAD.RPAREN
+                           ERR.PARAM = NCH
+                           RETURN
+                        END
+                        TYPE = ''
+                        ISNAME = TRUE
+                        TOKEN = SVAL[Z, SPOS - Z]
+                     END
+                  END
+               END
+            END
+            IF TYPE = '' THEN
+               * Not a function name, so we look to see if this is a
+               * dict item, a alpha version of a relational operator or
+               * maybe just a string constant. Note that if 'ISNAME' is
+               * 'true', we are expecting a dict item.
+               IF NOT(ISNAME) THEN
+                  * Back up from terminator char.
+                  SPOS = SPOS - 1
+                  * Check for alpha version of operator name
+                  LOCATE(NCH, ALPHA.OPS(1); POS) THEN
+                     TOKEN = ALPHA.OPS(2)<POS>
+                     TYPE  = ALPHA.OPS(3)<POS>
+                  END ELSE
+                     * Was not an alpha op. Before we give up and assume
+                     * this a string or dict item, check for 'special case'
+                     * of 'IS NULL' or 'IS NOT NULL' syntax.
+                     IF NCH = "IS" THEN
+                        POS = SPOS ; Z = -1
+                        LOOP
+                           * find end of word
+                           LOOP
+                              SPOS = SPOS + 1
+                              CH = SVAL[SPOS, 1]
+                           UNTIL CH = SPCE OR CH = TAB OR CH = LF OR CH = '' DO
+                           REPEAT
+                           NCH = OCONV(SVAL[POS+1, SPOS-POS-1], 'MCU')
+                           IF CH > '' THEN
+                              * Skip over trailing 'whitespace'
+                              LOOP
+                                 SPOS = SPOS + 1
+                                 CH = SVAL[SPOS, 1]
+                              WHILE CH = SPCE OR CH = TAB OR CH = LF DO REPEAT
+                              SPOS = SPOS - 1 ;* Back up from terminator
+                           END
+                        WHILE NCH = 'NOT' DO
+                           Z = Z * (-1)
+                           POS = SPOS
+                        REPEAT
+                        IF NCH # 'NULL' THEN
+                           * Error - bad 'IS NULL' or 'IS NOT NULL' clause!
+                           ERR = ERR.BAD.NULLTEST
+                           RETURN
+                        END
+                        IF Z > 0 THEN
+                           TOKEN = TOK.FUNC:@SVM:BFUNC.ISNOTNULL
+                        END ELSE
+                           TOKEN = TOK.FUNC:@SVM:BFUNC.ISNULL
+                        END
+                        TYPE = TYPE.BFUNC
+                        OPTR = OPTR + 1
+                        OUTP<1, OPTR> = TOKEN
+                        OUTT<1, OPTR> = TYPE
+                        * Now force a ')' character to be seen so that
+                        * the parser will see this as a function call!
+                        TYPE = TYPE.CPAREN ; TOKEN = TOK.CPAREN
+                     END
+                  END
+               END
+               IF TYPE = '' THEN
+                  * Must be either a dictionary item name, or a string
+                  * constant. We default to string if not a dict item to
+                  * avoid reporting a syntax error at this point. Note
+                  * however, we can (and will) report the error if we are
+                  * expecting a dict item (ie: 'ISNAME' set to true)
+                  LOCATE(TOKEN, DCACHE, 1; POS) THEN
+                     * Name found in cache!
+                     TYPE = TYPE.ID
+                     SVARID = DCACHE<2, POS>
+                  END ELSE
+                     * Not in cache (yet) - check if is a dict item.
+                     READ REC FROM F.DICT, TOKEN THEN
+                        Z = INDEX("DIV", OCONV(REC<1>[1, 1], 'MCU'), 1)
+                        IF Z > 0 THEN
+                           * This is a reference to another dict item!!
+                           SCRPTR = SCRPTR + 1      ;* Inc 'scratch ptr'
+                           DCACHE<1, POS> = TOKEN   ;* item name
+                           DCACHE<2, POS> = SCRPTR  ;* ptr to temp storage
+                           DCACHE<3, POS> = (Z = 1) ;* 'D' type item? (1/0)
+                           DCACHE<4, POS> = REC<2>  ;* pos/formula
+                           Z = OCONV(REC<6>, 'MCU')
+                           IF Z[1, 1] # 'S' THEN
+                              Z = 1 + (Z[2, 1] = 'S' OR Z[3, 1] = 'S')
+                           END ELSE Z = 0
+                           DCACHE<5, POS> = Z       ;* S/M/MS flag (0/1/2)
+                           SVARID = -(SCRPTR)
+                           TYPE  = TYPE.ID
+                        END
+                     END ELSE
+                        * Report error if we needed a dict item!
+                        IF ISNAME THEN
+                           * Error - This _had_ to be a dict item
+                           ERR = ERR.BAD.DITEM
+                           ERR.PARAM = TOKEN
+                           RETURN
+                        END
+                     END
+                  END
+                  IF TYPE = '' THEN
+                     * Unknown value. Not a dict item, or an operator,
+                     * or any other thing we 'know about'. Default to
+                     * a string constant. Check also that this is not
+                     * the 2nd part of the first param to a TRANS()
+                     * function call! ie: Syntax TRANS(DICT name,..etc)
+                     * If so, join both strings into a single entry.
+                     TOKEN = TOK.SVAR:@SVM:TOKEN
+                     IF PREV.TYPE = TYPE.ID AND OPTR > 1 THEN
+                        IF OUTP<1, OPTR-1, 1> = TOK.FUNC THEN
+                           IF FLIST(1)<OUTP<1, OPTR-1, 2>> = 'TRANS' THEN
+                              IF OUTP<1, OPTR, 1> = TOK.SVAR THEN
+                                 TOKEN = OUTP<1, OPTR>:SPCE:TOKEN<1, 1, 2>
+                                 OPTR = OPTR - 1 ;* We o/write last entry!
+                              END
+                           END
+                        END
+                     END
+                     TYPE = TYPE.ID
+                  END ELSE
+                     * Insert dict item into out input string, 'pushing'
+                     * a level (level count in variable 'DEPTH'). We also
+                     * add a terminator character so that we know when to
+                     * 'pop' back up a level. Also do a check on items we
+                     * have pushed so far, to avoid possible recursion!
+                     LOCATE(TOKEN, IDLIST; Z) THEN
+                        * Error - recursive dict item reference!
+                        ERR = ERR.BAD.RECCUR
+                        ERR.PARAM = TOKEN
+                        RETURN
+                     END
+                     DEPTH = DEPTH + 1
+                     ATLIST = INSERT(ATLIST, 1, 0, 0, ATPTR)
+                     IDLIST = INSERT(IDLIST, 1, 1, 0, TOKEN)
+                     IDLIST = INSERT(IDLIST, 2, 1, 0, SVARID)
+                     IDLIST = INSERT(IDLIST, 3, 1, 0, DCACHE<5, POS>)
+                     * Add 'nested item' token to output!
+                     TYPE = TYPE.NESTBEG
+                     TOKEN = TOK.NESTBEG
+                     IF SVARID > 0 THEN
+                        * If 'SVARID > 0' then we have seen this field
+                        * before, and a value that represents this will
+                        * have been calculated previously. Therefore,
+                        * rather than inserting the virtual field info
+                        * into the input (which would cause us to do all
+                        * the work again) The parser will load the prior
+                        * value from storage!
+                        Z = '' ;* No need to insert expr!
+                     END ELSE
+                        * We must insert the virtual field expression
+                        * into the input value at the current location!
+                        Z = DCACHE<4, POS>  ;* Position or virtual formula!
+                        IF DCACHE<3, POS> THEN
+                           * This is a 'D' type dict item!
+                           IF Z = 0 THEN
+                              Z = '@ID'
+                           END ELSE
+                              IF Z > 0 THEN
+                                 * Multi-valued result ok!
+                                 Z = 'EXTRACT(@RECORD,':Z:',0)'
+                              END ELSE
+                                 * Invalid number in 'D' item!
+                                 ERR.PARAM = IDLIST<1, 1>
+                                 ERR = ERR.BAD.SYNTAX
+                                 RETURN
+                              END
+                           END
+                        END
+                     END
+                     * 'Z' contains nested virtual field expr.
+                     SVAL = SVAL[1, STARTPOS-1]:Z:EOI:SVAL[SPOS+1, LEN(SVAL)]
+                     SPOS = STARTPOS - 1
+                  END
+               END
+            END
+         CASE CH = ','
+            TOKEN = TOK.COMMA ; TYPE = TYPE.COMMA
+         CASE CH = ":"
+            TYPE = TYPE.CATOP ; TOKEN = TOK.CAT
+         CASE CH = ';'
+            ATPTR = ATPTR + 1
+            TOKEN = TOK.SEMI:@SVM:ATPTR
+            TYPE = TYPE.EOF
+         CASE CH = '&' OR CH = '!'
+            TYPE = TYPE.LOGOP
+            IF CH = '&' THEN TOKEN = TOK.AND ELSE TOKEN = TOK.OR
+         CASE CH = '>'
+            NCH = SVAL[SPOS+1, 1]
+            IF NCH = '=' THEN
+               TOKEN = TOK.GE
+               SPOS = SPOS + 1
+            END ELSE
+               IF NCH = '<' THEN
+                  TOKEN = TOK.NE
+                  SPOS = SPOS + 1
+               END ELSE
+                  TOKEN = TOK.GT
+               END
+            END
+            TYPE = TYPE.RELOP
+         CASE CH = '='
+            NCH = SVAL[SPOS+1, 1]
+            IF NCH = '<' THEN
+               TOKEN = TOK.LE
+               SPOS = SPOS + 1
+            END ELSE
+               IF NCH = '>' THEN
+                  TOKEN = TOK.GE
+                  SPOS = SPOS + 1
+               END ELSE
+                  TOKEN = TOK.EQ
+               END
+            END
+            TYPE = TYPE.RELOP
+         CASE CH = '<'
+            NCH = SVAL[SPOS+1, 1]
+            IF NCH = '=' THEN
+               TOKEN = TOK.LE
+               SPOS = SPOS + 1
+            END ELSE
+               IF NCH = '>' THEN
+                  TOKEN = TOK.NE
+                  SPOS = SPOS + 1
+               END ELSE
+                  TOKEN = TOK.LT
+               END
+            END
+            TYPE = TYPE.RELOP
+         CASE CH = '#'
+            NCH = SVAL[SPOS+1, 1]
+            IF NCH = '>' THEN
+               TOKEN = TOK.LE
+               SPOS = SPOS + 1
+            END ELSE
+               IF NCH = '<' THEN
+                  TOKEN = TOK.GE
+                  SPOS = SPOS + 1
+               END ELSE
+                  TOKEN = TOK.NE
+               END
+            END
+            TYPE = TYPE.RELOP
+         CASE CH = '('
+            TYPE  = TYPE.OPAREN
+            TOKEN = TOK.OPAREN
+         CASE CH = ')'
+            TYPE  = TYPE.CPAREN
+            TOKEN = TOK.CPAREN
+         CASE CH = '['
+            * Start of string extraction.
+            TOKEN = TOK.FUNC:@SVM:BFUNC.SUBSTR
+            TYPE = TYPE.BFUNC
+            BCNT = BCNT + 1
+         CASE CH = ']'
+            * End of string extraction!
+            IF BCNT > 0 THEN
+               BCNT = BCNT - 1
+               TYPE = TYPE.CPAREN
+               TOKEN = TOK.CPAREN
+            END ELSE
+               * Error - mismatched '[' ']' characters!
+               ERR = ERR.BAD.SUBSTR
+               ERR.PARAM = '[]'
+               RETURN
+            END
+         CASE CH = EOI
+            IF DEPTH > 1 THEN
+               * End of 'nested item' encountered!
+               DEPTH = DEPTH - 1
+               SVARID = IDLIST<2, 1>
+               Z = IDLIST<3, 1> ;* MV flag (0/1/2)
+               IDLIST = DELETE(IDLIST, 1, 1, 0)
+               IDLIST = DELETE(IDLIST, 2, 1, 0)
+               IDLIST = DELETE(IDLIST, 3, 1, 0)
+               ATPTR = ATLIST<1>
+               ATLIST = DELETE(ATLIST, 1, 0, 0)
+               TOKEN = TOK.NESTEND:@SVM:SVARID:@SVM:Z
+               TYPE = TYPE.EOF
+            END ELSE
+               * Invalid character in input!
+               ERR = ERR.BAD.CHAR
+               ERR.PARAM = CH
+               RETURN
+            END
+         CASE 1
+            POS = INDEX("+-/*^", CH, 1)
+            IF POS > 0 THEN
+               * Arithmetic operator!
+               IF CH = '*' AND SVAL[SPOS+1, 1] = '*' THEN
+                  * Convert '**' to '^' token.
+                  SPOS = SPOS + 1
+                  CH = '^'
+               END
+               IF CH = '+' OR CH = '-' THEN
+                  * Test for unary operator!
+                  IF PREV.TYPE = TYPE.ID OR PREV.TYPE = TYPE.CPAREN THEN
+                     * Normal additive type operator!
+                     TYPE = TYPE.ADDOP
+                     IF CH = '-' THEN
+                        TOKEN = TOK.MINUS
+                     END ELSE
+                        TOKEN = TOK.PLUS
+                     END
+                  END ELSE
+                     * Convert to a unary operator!
+                     TYPE = TYPE.UNARYOP
+                     IF CH = '-' THEN
+                        TOKEN = TOK.UMINUS
+                     END ELSE
+                        TOKEN = TOK.UPLUS
+                     END
+                  END
+               END ELSE
+                  IF CH = '^' THEN
+                     TOKEN = TOK.EXP
+                     TYPE = TYPE.EXPOP
+                  END ELSE
+                     TYPE = TYPE.MULOP
+                     IF CH = '*' THEN
+                        TOKEN = TOK.MULT
+                     END ELSE
+                        TOKEN = TOK.DIVIDE
+                     END
+                  END
+               END
+            END ELSE
+               * Unexpected character!
+               ERR = ERR.BAD.CHAR
+               ERR.PARAM = CH
+               RETURN
+            END
+      END CASE
+      OPTR = OPTR + 1
+      OUTP<1, OPTR> = TOKEN
+      OUTT<1, OPTR> = TYPE
+      IF TYPE = TYPE.EOF AND TOKEN<1, 1, 1> = TOK.NESTEND THEN
+         * Do not use 'TYPE.EOF' here - This causes unary op problems!
+         PREV.TYPE = TYPE.ID  ;* Change from 'eof' to 'id'
+      END ELSE
+         PREV.TYPE = TYPE
+      END
+   REPEAT
+   IF PREV.TYPE # TYPE.EOF THEN
+      * Add a end-of-statement token!
+      OPTR = OPTR + 1
+      OUTP<1, OPTR> = TOK.EOF
+      OUTT<1, OPTR> = TYPE.EOF
+   END
+*
+IF IN.DEBUG THEN
+   CRT 'OUTT=':OUTT
+   CRT 'OUTP=':OUTP
+END
+*
+   *
+* *************************************************************** *
+* ITYPE expression parser. This function expects to be passed the *
+* value from attribute 2 in a virtual expression dictionary item. *
+* On return, variable 'ERR' will have a value of 'ERR.NO.ERROR'   *
+* if the expression parsed ok, or will contain an error number    *
+* that should help determine why the parse failed. On an error    *
+* condition, an additional variable 'ERR.PARAM' may contain more  *
+* information on the error.                                       *
+* If no error occured, the value mark delimited variable 'OSTK'   *
+* is returned. This is the parser output, and represents a 'stack *
+* format' intermediate code that can be evaluated by the          *
+* expression evaluation 'machine'.                                *
+* *************************************************************** *
+   *
+   PUSH.STATE = '' ; OSTKPTR = 0
+   PUSH.TOP = '' ; PUSH.OP.TOP = ''
+   PUSH.PACTIVE = '' ; PUSH.PCNT = ''
+   DEPTH = 0 ; SCNT = 1 ; PACTIVE = 0 ; PCNT = ''
+   STACK = 1 ; TOP = 1 ; OP.STACK = '' ; OP.TOP = 0
+   CURR.TOP = TOP ; CURR.OP.TOP = OP.TOP
+   *
+   FOR PTR = 1 TO OPTR
+      LOOP
+         FULLTOKEN = OUTP<1, PTR>
+         TOKEN = FULLTOKEN<1, 1, 1>
+         TYPE  = OUTT<1, PTR>
+*
+IF IN.DEBUG THEN
+   CRT 'TOKEN=':TOKEN:', TYPE=':TYPE
+END
+*
+      WHILE TYPE = TYPE.NESTBEG DO
+         * This is the start of a nested expression. We need to preserve
+         * the current state of the parser, and then setup as if starting
+         * from scratch! When we encounter an 'end-of-expr' parser type
+         * that has a corresponding 'nested-expr-end' token, we can
+         * re-instate the prior parser state and continue..
+         DEPTH = DEPTH + 1
+         * Preserve current parser state!
+         PUSH.STATE<DEPTH> = STACK<TOP>
+         PUSH.TOP<DEPTH> = TOP ; PUSH.OP.TOP<DEPTH> = OP.TOP
+         PUSH.PACTIVE<DEPTH> = PACTIVE ; PUSH.PCNT<DEPTH> = PCNT
+         * Init parser variables for new expression!
+         TOP = TOP + 1 ; CURR.TOP = TOP ; CURR.OP.TOP = OP.TOP
+         STACK<TOP> = 1 ; PACTIVE = 0 ; PCNT = ''
+         * Get the next token from input
+         PTR = PTR + 1
+      REPEAT
+      *
+      LOOP
+         REDUCING = FALSE
+         STATE = STACK<TOP>
+         CELL = SEQ(PTAB(STATE)[TYPE, 1])
+*
+IF IN.DEBUG THEN
+   CRT 'STATE=':STATE:', CELL=':PTAB(STATE)[TYPE, 1]:', TYPE=':TYPE
+   CRT 'STACK=':STACK:', TOP=':TOP
+END
+*
+         IF CELL < 97 THEN
+            IF CELL > 64 THEN
+               *
+               * Parser enters 'shift' state
+               * 
+               TOP = TOP + 1
+               STACK<TOP> = CELL - 64
+               IF TOKEN < TOK.OPAREN THEN
+                  * Put token into output!
+                  OP.TOP = OP.TOP + 1
+                  OP.STACK<OP.TOP> = FULLTOKEN
+                  IF TOKEN = TOK.FUNC OR TOKEN = TOK.BFUNC THEN
+                     * Start of function. Init param counter..
+                     PACTIVE = PACTIVE + 1
+                     IF OUTT<1, PTR+1> = TYPE.CPAREN THEN
+                        PCNT<1, PACTIVE> = 0
+                     END ELSE
+                        PCNT<1, PACTIVE> = 1
+                     END
+                  END
+               END ELSE
+                  IF TOKEN = TOK.COMMA THEN
+                     IF PACTIVE > 0 THEN
+                        PCNT<1, PACTIVE> = PCNT<1, PACTIVE> + 1
+                     END ELSE
+                        * Wierd error? - Should never happen
+                        ERR.PARAM = 'Unexpected comma during parse phase!'
+                        ERR = ERR.PARSER.ERR
+                        RETURN
+                     END
+                  END
+               END
+            END ELSE
+               *
+               * Error found! - Set 'ERR' and exit
+               *
+               ERR = ERR.PARSER.ERR + (CELL - 48)
+               ERR.PARAM = ''
+               RETURN
+            END
+         END ELSE
+            IF CELL = 126 THEN
+               *
+               * EOF token encountered! This might be the end of a 'nested'
+               * expression (ie: dict item reference), end of an expression
+               * within a list of expressions (eg: 1+2;@1*3), or the end
+               * of the input stream itself.
+               *
+               IF TOKEN = TOK.NESTEND THEN
+                  POS = FULLTOKEN<1, 1, 2>
+                  IF POS < 0 THEN
+                     VAL = FULLTOKEN<1, 1, 3>
+                     * This is the first time we have processed this
+                     * nested expression (ie: ref to another dict item)
+                     * Store the result of this evaluation in a temporary
+                     * area, so that any subsequent reference can avoid
+                     * doing this work again! - The number in 'POS' is
+                     * used to refer to the temp. storage area used.
+                     * Note that we will also store the MV flag associated
+                     * with the nested expression. This is in var 'VAL'.
+                     OSTKPTR = OSTKPTR + 1
+                     OSTK<1, OSTKPTR> = TOK.EXPSTORE:@SVM:ABS(POS):@SVM:VAL
+                  END ELSE
+                     IF POS > 0 THEN
+                        * We have seen this nested expression before, and
+                        * have previously saved its evaluated result into a
+                        * temporary variable. Load this value now.
+                        OSTKPTR = OSTKPTR + 1
+                        OSTK<1, OSTKPTR> = TOK.EXPLOAD:@SVM:POS
+                     END ELSE
+                        * Error - missing data from 'end-nested-expr' token!
+                        ERR.PARAM = 'Missing info from end-nested-expr token!'
+                        ERR = ERR.PARSER.ERR
+                        RETURN
+                     END
+                  END
+                  IF DEPTH < 1 THEN
+                     * Error - no 'nest begin' seen?
+                     ERR.PARAM = 'End of nested expr found before start!'
+                     ERR = ERR.PARSER.ERR
+                     RETURN
+                  END
+                  * End of 'nested expression'
+                  TOP = PUSH.TOP<DEPTH> + 1 ; OP.TOP = PUSH.OP.TOP<DEPTH>
+                  PACTIVE = PUSH.PACTIVE<DEPTH> ; PCNT = PUSH.PCNT<DEPTH>
+                  * Amend parser state stack to think we have just done
+                  * a 'reduction' for a parser type of 'id'.
+                  VAL = PJMP(PUSH.STATE<DEPTH>)
+                  IF VAL < 1 THEN
+                     * Assume missing operator in expression.
+                     ERR = ERR.MISSING.OP
+                     ERR.PARAM = ''
+                     RETURN
+                  END
+                  STACK<TOP> = VAL
+                  * Dec. expr nesting counter.
+                  DEPTH = DEPTH - 1
+               END ELSE
+                  IF TOKEN = TOK.SEMI AND PTR # OPTR THEN
+                     * End of expression (Not end-of-input) We should
+                     * store the current value of top of stack in an
+                     * '@' variable, for use by later expressions.
+                     VAL = FULLTOKEN<1, 1, 2>
+                     IF VAL < 1 THEN
+                        * Error - missing info from 'semi' token!
+                        ERR.PARAM = 'Missing info from end-expr token!'
+                        ERR = ERR.PARSER.ERR
+                        RETURN
+                     END
+                     OSTKPTR = OSTKPTR + 1
+                     OSTK<1, OSTKPTR> = TOK.ATSTORE:@SVM:VAL
+                     TOP = CURR.TOP ; OP.TOP = CURR.OP.TOP
+                     STACK<TOP> = 1 ; PACTIVE = 0 ; PCNT = ''
+                  END
+               END
+            END ELSE
+               *
+               * Parser enters 'reduce' state.
+               *
+               REDUCING = TRUE
+               PRODUCTION = CELL - 96
+               IF PRODUCTION = PROD.FUNC THEN
+                  * Reducing for a 'Function(..)' production. This may
+                  * have a variable number of parameters. The count of
+                  * parameters seen is in 'PCNT<1,n>', so we can validate.
+                  IF PACTIVE < 1 THEN
+                     * Wierd error? - Should never happen
+                     ERR.PARAM = "Parsing F(), but no function seen yet?"
+                     ERR = ERR.PARSER.ERR
+                     RETURN
+                  END
+                  VAL = PCNT<1, PACTIVE>
+                  * Validate number of parameters in function!
+                  POS = OP.STACK<OP.TOP, 1, 2>
+                  IF POS < 0 THEN
+                     IF POS = BFUNC.SUBSTR THEN
+                        IF NOT(VAL = 1 OR VAL = 2 OR VAL = 3) THEN
+                           * Invalid param count for substr extract!!
+                           ERR = ERR.PARAM.COUNT
+                           ERR.PARAM = "[]"
+                           RETURN
+                        END
+                     END
+                     * Convert 'position' in list to func. 'op code'
+                     OP.STACK<OP.TOP, 1, 2> = BF.OPCODE<ABS(POS)>
+                  END ELSE
+                     Z = FLIST(2)<POS>  ;* Minimum param count.
+                     * If 'Z' < 0 then any number of params is ok.
+                     IF VAL < Z THEN
+                        * Error - too few parameters!
+                        VAL = ''
+                     END ELSE
+                        IF VAL > Z THEN
+                           * More than the required number of parameters
+                           * found. Check for optional parameters. Note
+                           * that an optional param count of '-1' indicates
+                           * any number of parameters is acceptable.
+                           SPOS = FLIST(3)<POS>
+                           IF SPOS >= 0 THEN
+                              * Add in optional param count.
+                              Z = Z + SPOS
+                              IF VAL # Z THEN VAL = ''
+                           END
+                        END
+                     END
+                     IF VAL = '' THEN
+                        * Error! - Bad function parameter count.
+                        ERR = ERR.PARAM.COUNT
+                        ERR.PARAM = FLIST(1)<POS>
+                        RETURN
+                     END
+                     * Convert 'position' in list to func. 'op code'
+                     OP.STACK<OP.TOP, 1, 2> = F.OPCODE<POS>
+                  END
+                  * Add param count to function output opcode!
+                  OP.STACK<OP.TOP, 1, 3> = VAL
+                  * Amend param count to include comma separators. This
+                  * value then used in 'reduction' of parser stack.
+                  IF VAL > 0 THEN
+                     VAL = VAL + VAL + 1
+                  END ELSE VAL = 2
+                  IF POS < 0 THEN
+                     * Add 1 to param count to ensure we reduce by
+                     * production 'E func()' and not just 'func()'
+                     VAL = VAL + 1
+                  END
+                  PACTIVE = PACTIVE - 1
+               END ELSE
+                  * 'Fixed' size grammar production!
+                  VAL = PROD.SIZE[PRODUCTION, 1]
+               END
+               IF PRODUCTION # PROD.PAREN THEN
+                  * Stack grammar 'productions' into output variable
+                  * with the exception of the '( E )' production which
+                  * has no meaning during expression evaluation.
+                  OSTKPTR = OSTKPTR + 1
+                  OSTK<1, OSTKPTR> = OP.STACK<OP.TOP>
+                  OP.TOP = OP.TOP - 1
+               END
+               TOP = TOP - VAL
+               STATE = STACK<TOP>
+               TOP = TOP + 1
+*
+IF IN.DEBUG THEN
+   CRT 'Reduce for production: ':PRODUCTION:' - size=':VAL
+   CRT 'STATE=':STATE:', STACK=':STACK:', TOP=':TOP-1
+   IF STATE >= 1 THEN CRT 'JUMP TO:':PJMP(STATE) ELSE CRT 'STATE < 1 !!'
+END
+*
+               VAL = PJMP(STATE)
+               IF VAL < 1 THEN
+                  * Wierd parser error!
+                  ERR.PARAM = "Invalid entry in parser jump list!"
+                  ERR = ERR.PARSER.ERR
+                  RETURN
+               END
+               STACK<TOP> = VAL
+            END
+         END
+      WHILE REDUCING DO REPEAT
+   NEXT PTR
+   IF NOT(TYPE = TYPE.EOF) THEN
+      * No end-if-input token encountered! Should never happen...
+      ERR.PARAM = "No end-of-input token found!"
+      ERR = ERR.PARSER.ERR
+   END
+   RETURN
+*
+   END
