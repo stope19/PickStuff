@@ -1,0 +1,186 @@
+PROGRAM ICRYPT
+* Simple utility for strong encryption/decryption of an item.
+* ********************************************************** *
+* ********************************************************** *
+* Use the IDEA encryption algorithm to encrypt or decrypt    *
+* an item in a file.                                         *
+* This program is really only intended to demontrate how the *
+* encryption functions and the base64 encoding utility might *
+* be used.                                                   *
+*                                                            *
+* Usage: ICRYPT filename itemname    - encrypt               *
+*        ICRYPT -R filename itemname - decrypt               *
+*                                                            *
+* In both cases, you will be prompted for a pass-phrase.     *
+*                                                            *
+* Note: For UniData, if you have trouble with storing the    *
+* base64 string in UniData DIR files, consider that it may   *
+* be translating the linefeeds into attributes marks 'for    *
+* you'. This can stuff things up. Look at the setting of     *
+* UDT.OPTIONS 95 - this is called: 'U_NO_TRANSLATE_NEWLINE'. *
+* Set as appropriate. Also note that there is no real reason *
+* to store the UniVerse and UniData encrypted data using     *
+* base64 strings, but as this is a contrived example program *
+* to demonstrate various functions .... <g>            (dmm) *
+* ********************************************************** *
+* ********************************************************** *
+     *
+     EQU SPCE TO CHAR(32), TRUE TO 1, FALSE TO 0
+     *
+     EQU ENCRYPT    TO 0 ;* udt/uv
+     EQU DECRYPT    TO 1 ;* udt/uv
+     EQU USE.BASE64 TO 1 ;* udt/uv
+*r83 EQU ENCRYPT    TO 2 ;* Encrypt to hex string!
+*r83 EQU DECRYPT    TO 3 ;* Decrypt from hex string!
+*r83 EQU USE.BASE64 TO 0 ;* Data stored in hex, no need for base64!
+     *
+*r83 CMDLINE = ERROR()
+     CMDLINE = @SENTENCE ;* udt/uv
+     *
+*r83 DIM IK(52)
+     *
+     Z = INDEX(CMDLINE, SPCE, 1)
+     IF Z > 0 THEN
+        LOOP Z = Z + 1 WHILE CMDLINE[Z, 1] = SPCE DO REPEAT
+        CMDLINE = CMDLINE[Z, LEN(CMDLINE)]
+     END ELSE CMDLINE = ''
+     IF CMDLINE = '' THEN
+        CRT
+        CRT "  Usage   :  ICRYPT [ -R ] [ DICT | DATA ] filename itemname"
+        CRT
+        CRT "       -R :  If present, the -R option indicates a decryption"
+        CRT "             operation is required. Absence indicates encryption."
+        CRT
+        CRT "  filename:  Name of target file. May be prefixed by DICT modifier."
+        CRT
+        CRT "  itemname:  Name of item id within file 'filename' to be used in"
+        CRT "             then encryption/decryption operation."
+        CRT
+        STOP
+     END
+     *
+     * Look for option flag!
+     *
+     CRYPT.MODE = ENCRYPT
+     IF CMDLINE[1, 1] = '-' THEN
+        CH = OCONV(CMDLINE[2, 1], 'MCU')
+        IF CH = 'R' THEN
+           CRYPT.MODE = DECRYPT
+        END ELSE
+           CRT 'Invalid option character in command line!'
+           STOP
+        END
+        Z = 2
+        LOOP Z = Z + 1 WHILE CMDLINE[Z, 1] = SPCE DO REPEAT
+        CMDLINE = CMDLINE[Z, LEN(CMDLINE)]
+     END
+     *
+     * Extract and validate file name!
+     *
+     DFLG = ''
+     FNAME = FIELD(CMDLINE, SPCE, 1)
+     IF FNAME = 'DICT' OR FNAME = 'DATA' THEN
+        IF FNAME = 'DICT' THEN DFLG = FNAME
+        Z = COL2()          ;* Find next non-space!
+        LOOP Z = Z + 1 WHILE CMDLINE[Z, 1] = SPCE DO REPEAT
+        CMDLINE = CMDLINE[Z, LEN(CMDLINE)]
+        FNAME = FIELD(CMDLINE, SPCE, 1)
+     END
+     OPEN DFLG, FNAME TO F.FILE ELSE
+        IF DFLG > '' THEN FNAME = DFLG:SPCE:FNAME
+        CRT "Cannot open '":FNAME:"'"
+        STOP
+     END
+     *
+     Z = COL2()             ;* Find next non-space!
+     LOOP Z = Z + 1 WHILE CMDLINE[Z, 1] = SPCE DO REPEAT
+     CMDLINE = CMDLINE[Z, LEN(CMDLINE)]
+     *
+     * Extract item name, or check for active list!
+     *
+     IF CMDLINE = '' THEN
+        IF NOT(SYSTEM(11)) THEN
+           CRT 'Item name ':
+           INPUT INAME
+           INAME = TRIM(INAME)
+           IF INAME = '' THEN STOP
+        END ELSE
+           READNEXT INAME ELSE STOP
+        END
+     END ELSE
+        INAME = TRIM(CMDLINE)
+     END
+     *
+     * Ok, lets do it!
+     *
+*udt NOCONVERT ON           ;* UniData only!!
+     *
+     READ REC FROM F.FILE, INAME ELSE
+        IF DFLG > '' THEN FNAME = DFLG:SPCE:FNAME
+        CRT "'":INAME:"' not found on file ":FNAME
+        STOP
+     END
+     *
+     * Prompt for destination item
+     *
+     CRT 'Destination item ':
+     INPUT DNAME
+     DNAME = TRIM(DNAME)
+     IF DNAME = '' THEN STOP
+     *
+     * Get password/phrase from user!
+     *
+     CRT "Pass phrase ":
+     INPUT PASSWD
+     IF PASSWD = "" THEN STOP
+     *
+     IF CRYPT.MODE = DECRYPT AND USE.BASE64 THEN
+        * If decrypting, convert from Base64 format first!
+        CRT 'Converting stored item from Base64 format ...'
+        CALL BASE64(1, REC, OUTBUF, ERR)
+        IF ERR THEN
+           CRT 'Error converting from Base64 format!'
+           STOP
+        END
+        REC = OUTBUF
+     END
+     *
+     IF CRYPT.MODE = DECRYPT THEN Z = 'De' ELSE Z = 'En'
+     CRT Z:'crypting data ...'
+     CALL CIPHER(CRYPT.MODE, PASSWD, REC, OUTBUF, ERR) ;* udt/uv
+*r83 CALL CIPHER(CRYPT.MODE, PASSWD, REC, OUTBUF, ERR, MAT IK)
+     *
+     IF ERR THEN
+        IF CRYPT.MODE = DECRYPT AND ERR = 2 THEN
+           CRT 'Wrong pass-phrase specified for decryption!'
+           STOP
+        END
+        CRT 'Error code ':ERR:' - aborted!'
+        STOP
+     END
+     IF CRYPT.MODE = ENCRYPT AND USE.BASE64 THEN
+        * If encrypting, convert to Base64 before writing to disk!
+        CRT 'Converting encrypted data to Base64 format ...'
+        CALL BASE64(0, OUTBUF, REC, ERR)
+        IF ERR THEN
+           CRT 'Error converting encrypyted item to Base64 format!'
+           STOP
+        END
+        OUTBUF = REC
+     END
+     *
+     READ TEMP FROM F.FILE, DNAME THEN
+        CRT 'Overwrite? (Y/N) ':
+        INPUT REPLY
+        REPLY = OCONV(TRIM(REPLY), 'MCU')
+        OFLAG = (REPLY = 'Y')
+     END ELSE OFLAG = TRUE
+     IF OFLAG THEN
+        WRITE OUTBUF ON F.FILE, DNAME
+     END
+     *
+*udt NOCONVERT OFF          ;* UniData only!!
+     STOP
+*
+     END
+     
