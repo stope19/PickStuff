@@ -1,0 +1,146 @@
+PROGRAM BTREE.REGEN
+* Generic Btree index regeneration function  -  [dmm Feb '96]
+***************************************************************************
+* Utility - Used to rebuild the indexes defined for a specified data file.
+*
+* Notes:
+*
+* Data files for which indexes have been defined will have a $BTREE item
+* in their dictionary. The actual index itself is in a file with a name
+* built from the datafile name suffixed with the string '.IDX'
+*
+* The '$BTREE' definition item has the structure:
+*
+* <1>    = 'X'
+* <2. m> = mv'd - index descriptions
+* <3. m> = mv'd - indexed attribute reference
+*          eg: 0 (key), 1 (attr 1), 1.4 (attr 1, value 4)
+* <4. m> = mv'd - expressions (for OCONV), corresponding to <3.m>
+* <5. m> = mv'd - input conversion codes, corresponding to <3.m>
+* <6. m> = mv'd - indexed string justification codes ('null' = AL)
+* <7. m> = mv'd - key value justification codes ('null' = 1)
+* <8. m> = mv'd - maximum node sizes (in bytes) if not default
+* <9. m> = mv'd - flags (implemented as 'bit flags') where:
+*    bit 0 = true, if MV/SMV index info to be stored
+*        1 = true, if indexed string must be 'upper cased'
+*        2 = true, if unique values only may be indexed
+*        3 = true, if null values are to be ignored
+*        4 = true, if indexing on each word
+*
+* Note that when passed to the update function, the first 2 attributes
+* of this structure must have been deleted.
+*
+* Rel: 1.0
+***************************************************************************
+*
+     EQU AM TO CHAR(254), VM TO CHAR(253), SVM TO CHAR(252)
+     EQU SPCE TO CHAR(32), TRUE TO 1, FALSE TO 0, ROOT.ID TO 0, DOT TO '.'
+*
+     EQU MODE.INS      TO 1       ;* Insert mode (for BTREE.UPDATE)
+     EQU BTREE.DEFN.ID TO "$BTREE"
+*
+*    Get command line info before it can be destoyed! - Note: Use of the
+*    'ERROR()' function is R83 specific! - Amend this code as required.
+*
+     IF SYSTEM(16) = 0 THEN
+        BUFF = TRIM(ERROR())      ;* r83
+!jBase  BUFF = TRIM(@SENTENCE)
+!ap     TCLREAD BUFF ; BUFF = TRIM(BUFF)
+        IF FIELD(BUFF, SPCE, 1) = 'RUN' THEN
+           FNAME = FIELD(BUFF, SPCE, 4)
+        END ELSE FNAME = FIELD(BUFF, SPCE, 2)
+     END ELSE
+        IF SYSTEM(10) THEN
+           ECHO OFF
+           INPUT FNAME
+           ECHO ON
+        END ELSE FNAME = ''
+     END
+*
+*    Get name of data file, or prompt user for name.
+*
+     PROMPT ''
+     IF FNAME > '' THEN
+        GOSUB 1000                ;* Validate data file name!
+     END
+     IF FNAME = '' THEN           ;* Prompt user for data file name?
+        LOOP
+           CRT
+           ERRFLG = FALSE
+           CRT 'Enter Data Filename, or <RETURN> to exit :':
+           INPUT FNAME
+           IF FNAME > '' THEN
+              GOSUB 1000
+              ERRFLG = (FNAME = '')
+           END
+        WHILE ERRFLG DO REPEAT
+        IF FNAME = '' THEN STOP
+     END
+*
+*    Open the actual index file, else tell user to create it,
+*    then to run this function again!
+*
+     OPEN '', FNAME:'.IDX' TO F.INDX ELSE
+        CRT "'":FNAME:"' has no data level index file created for it!"
+        CRT "Create the file, then run this function again."
+        STOP
+     END
+*
+*    Ok, we can now clear existing data from this index, then re-build
+*    it from items in the data file. Note that this process cannot 'own'
+*    the index during the re-build, so the user must ensure no other
+*    process attempts an update before this function completes!
+*
+     KOUNT = 0 ; ERRFLG = FALSE
+     NO.VALS = DCOUNT(INDEX.DEFN<1>, VM)
+     IF NO.VALS > 0 THEN
+        CRT 'Re-building index file ...'
+        CLEARFILE F.INDX          ;* Clear index file
+        SELECT F.DATA             ;* Select data file
+        LOOP
+           READNEXT ID ELSE ID = AM
+        UNTIL ID = AM DO
+           KOUNT = KOUNT + 1
+           IF MOD(KOUNT, 50) = 0 THEN CRT KOUNT
+           READ RECORD FROM F.DATA, ID THEN
+              CALL BTREE.UPDATE(MODE.INS, F.INDX, INDEX.DEFN, '', RECORD, ID, ERRFLG)
+              IF ERRFLG THEN
+                 CRT 'Regeneration halted due to index update error!'
+                 STOP
+              END
+           END
+        REPEAT
+     END
+     STOP
+*
+* ************************************************ *
+* Validate data file name as an existing file with *
+* a '$BTREE' definition item in its dictionary.    *
+* ************************************************ *
+1000*
+     OPEN 'DICT', FNAME TO F.DICT THEN
+        READ INDEX.DEFN FROM F.DICT, BTREE.DEFN.ID THEN
+           IF INDEX.DEFN<1> # 'X' THEN
+              CRT "'":BTREE.DEFN.ID:"' item appears to be corrupt!"
+              FNAME = ''
+           END ELSE
+*             Remove 1st 2 attributes. These not used in update!
+              INDEX.DEFN = DELETE(INDEX.DEFN, 1, 0, 0)
+              INDEX.DEFN = DELETE(INDEX.DEFN, 1, 0, 0)
+*             Open the data level of this file!
+              OPEN '', FNAME TO F.DATA ELSE
+                 CRT "Cannot open '":FNAME:"'"
+                 FNAME = ''
+              END
+           END
+        END ELSE
+           CRT "'":FNAME:"' has no index definition item!"
+           FNAME = ''
+        END
+     END ELSE
+        CRT "Cannot open DICT '":FNAME:"'"
+        FNAME = ''
+     END
+     RETURN
+*
+     END
