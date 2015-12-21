@@ -1,0 +1,62 @@
+PROGRAM TEST.SHA1
+* ********************************************************** *
+* ********************************************************** *
+* Validate the SHA1 function.                                *
+* Test Vectors (from FIPS PUB 180-1)                         *
+* "abc"                                                      *
+* A9993E36 4706816A BA3E2571 7850C26C 9CD0D89D               *
+* "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq" *
+* 84983E44 1C3BD26E BAAE4AA1 F95129E5 E54670F1               *
+* A million repetitions of "a"                               *
+* 34AA973C D4C4DAA4 F61EEB2B DBAD2731 6534016F               *
+*                                                            *
+* Other test vectors from:                                   *
+* Handbook of Applied Cryptography_ by Alfred J. Menezes.    *
+* Table 9.6 Test vectors for selected hash functions pg 345. *
+* See this at: www.cacr.math.uwaterloo.ca/hac/               *
+* ""  =  DA39A3EE 5E6B4B0D 3255BFEF 95601890 AFD80709        *    
+* "a" =  86F7E437 FAA5A7FC E15D1DDC B9EAEAEA 377667B8        *
+* "abcdefghijklmnopqrstuvwxyz" =                             *
+* 32D10C7B 8CF96570 CA04CE37 F2A19D84 240D3A89               *
+* ********************************************************** *
+* ********************************************************** *
+     *
+     *r83 DIM SHA1.STATE(23)  ;* State storage over multiple calls!
+     *
+     CALL SHA1(1, '')      ;* r83 add ,MAT SHA1.STATE) to CALL
+     SVAL = "abc"
+     CALL SHA1(2, SVAL)    ;* r83 add ,MAT SHA1.STATE) to CALL
+     CALL SHA1(3, SVAL)    ;* r83 add ,MAT SHA1.STATE) to CALL
+     SVAL = (SVAL = "A9993E364706816ABA3E25717850C26C9CD0D89D")
+     CRT 'Test #1 = ':SVAL
+     *
+     CALL SHA1(1, '')      ;* r83 add ,MAT SHA1.STATE) to CALL
+     SVAL = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+     CALL SHA1(2, SVAL)    ;* r83 add ,MAT SHA1.STATE) to CALL
+     CALL SHA1(3, SVAL)    ;* r83 add ,MAT SHA1.STATE) to CALL
+     SVAL = (SVAL = "84983E441C3BD26EBAAE4AA1F95129E5E54670F1")
+     CRT 'Test #2 = ':SVAL
+     *
+     CALL SHA1(1, '')      ;* r83 add ,MAT SHA1.STATE) to CALL
+     SVAL = STR('a', 1000)
+     FOR TIMES = 1 TO 1000
+        CALL SHA1(2, SVAL) ;* r83 add ,MAT SHA1.STATE) to CALL
+        CRT '.':
+     NEXT TIMES
+     CALL SHA1(3, SVAL)    ;* r83 add ,MAT SHA1.STATE) to CALL
+     SVAL = (SVAL = "34AA973CD4C4DAA4F61EEB2BDBAD27316534016F")
+     CRT
+     CRT 'Test #3 = ':SVAL
+     *
+     SVAL = ""
+     CALL SHA1(0, SVAL)    ;* r83 add ,MAT SHA1.STATE) to CALL
+     SVAL = (SVAL = "DA39A3EE5E6B4B0D3255BFEF95601890AFD80709")
+     CRT 'Test #4 = ':SVAL
+     *
+     SVAL = "abcdefghijklmnopqrstuvwxyz"
+     CALL SHA1(0, SVAL)    ;* r83 add ,MAT SHA1.STATE) to CALL
+     SVAL = (SVAL = "32D10C7B8CF96570CA04CE37F2A19D84240D3A89")
+     CRT 'Test #5 = ':SVAL
+     STOP
+*
+     END
