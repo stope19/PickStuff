@@ -1,0 +1,627 @@
+* ******************************************************************* *
+* ******************************************************************* *
+* PROGRAM: FEDIT      (FRAME EDITOR)        (PC/R83 Only!!)           *
+*                                                                     *
+*  AUTHOR: Dmm   - April 92                                           *
+*                                                                     *
+* PURPOSE: Allows editing of a specified frame (ABS or Data) in a     *
+*          'screen editor' window. Used to fix GFE's ..etc            *
+*          Can be run from a PROC or directly from 'real' TCL         *
+*                                                                     *
+*          NOTE: Requires one ABS frame to be loaded. (User may       *
+*                specify location!)                                   *
+*                                                                     *
+*          For port 0    - Chars to display are all those > CHAR(31)  *
+*          For ports > 0 - Display chars are > 31 and < 128           *
+*                          Non-displayable chars are shown as dots    *
+*                                                                     *
+* WARNING: This program is dangerous! Be very very carefull!          *
+* ******************************************************************* *
+* ******************************************************************* *
+     *
+     EQU TRUE TO 1, FALSE TO 0, SM TO CHAR(255), AM TO CHAR(254)
+     EQU VM TO CHAR(253), SVM TO CHAR(252), BELL TO CHAR(7)
+     EQU HEX.LIST  TO '0123456789ABCDEF'  ;* Valid HEX characters
+     EQU BACKSPACE TO 8                   ;* Backspace character value
+     EQU DTX       TO 'MCDX'
+     EQU XTD       TO 'MCXD'
+     *
+     *--- Get command line info before it can be destoyed!
+     *
+     PROCREAD BUFF ELSE
+        IF SYSTEM(16) = 0 THEN BUFF = TRIM(ERROR()) ELSE BUFF = ''
+     END
+     IF NOT(INDEX(OCONV(SYSTEM(100),'MCU'),'R83',1)) THEN
+        CRT 'Can only run on R83 Pick...'
+        STOP
+     END
+     *
+     DIM LINKS(3,4), ARROW.KEYS(4)
+     *
+     EQU LEFT.ARROW  TO ARROW.KEYS(1)
+     EQU RIGHT.ARROW TO ARROW.KEYS(2)
+     EQU UP.ARROW    TO ARROW.KEYS(3)
+     EQU DOWN.ARROW  TO ARROW.KEYS(4)
+     *
+     EQU FWD.LINK    TO LINKS(1,1)
+     EQU NNCF        TO LINKS(1,2)
+     EQU BCK.LINK    TO LINKS(1,3)
+     EQU NPCF        TO LINKS(1,4)
+     *
+     LINKS(2,1) = 22 ; LINKS(3,1) = 12
+     LINKS(2,2) = 39 ; LINKS(3,2) = 6
+     LINKS(2,3) = 56 ; LINKS(3,3) = 12
+     LINKS(2,4) = 73 ; LINKS(3,4) = 6
+     *
+     H.LX = 9 ; H.RX = 40
+     H.TY = 5 ; H.BY = 20
+     A.LX = 50; A.RX = 65
+     A.TY = 5 ; A.BY = 20
+     *
+     HON = @(-7)
+     HOFF = @(-8)
+     ERASE = @(-1)
+     CLERR = @(0,23):@(-4)
+     SYS.CHARS = 'FF':VM:'FE':VM:'FD':VM:'FC':VM:'FB'
+     SYS.CHARS<2> = '_':VM:'^':VM:']':VM:'/':VM:'}'
+     PORT = FIELD(OCONV('','U50BB'),' ',1)
+     MLOAD = 'P':AM:'2':AM:'001F'
+     *
+     BGS = @(0,1):HON:"Frame Number:":@(31,1):"Format:":@(67,1):"Page:":@(75,1):"of"
+     BGS = BGS:@(6,2):"Links - FORWARD:":@(33,2):"NNCF:":@(46,2):"BACKWARD:":@(67,2):"NPCF:"
+     BGS = BGS:@(0,22):"Command:":@(20,22):"(X=exit, F=file, E=edit, L=links, 'nn'=frame, ?=help)":HOFF
+     *
+     *--- Pick up arrow key def item from ERRMSG item FEDIT.KEYS else
+     *    call routine to get defs from user and save.
+     *
+     FNAME = ''
+     OPEN '','MD' TO MD ELSE FNAME = 'MD'
+     OPEN '','ERRMSG' TO ERRMSG ELSE FNAME = 'ERRMSG'
+     IF FNAME > '' THEN
+       CRT "Cannot open '":FNAME:"' file - aborting!"
+       STOP
+     END
+     FEDIT.KEY = 'FEDIT.KEYS.':PORT
+     MATREAD ARROW.KEYS FROM ERRMSG,FEDIT.KEY ELSE GOSUB 1800
+     *
+     *--- Ensure the ABS frame is loaded. If not, then load now!
+     *
+     READ REC FROM MD,'MLOAD' ELSE WRITE MLOAD ON MD,'MLOAD'
+     LOOP
+       READ ASM.OBJECT FROM ERRMSG,'FEDIT.ASM' THEN
+         EXECUTE 'MLOAD ERRMSG FEDIT.ASM (V)' CAPTURING CAPT
+         IF NOT(INDEX(CAPT,'[217]',1)) THEN
+           GOSUB 3000 ; OK = 0
+         END ELSE OK = 1
+       END ELSE
+         GOSUB 3000 ; OK = 0
+       END
+     UNTIL OK DO REPEAT
+     Z = INDEX(ASM.OBJECT<1>,'7FF0',1)
+     IF Z > 0 THEN
+       HFID = ASM.OBJECT<1>[Z+5,3]
+       READ.FRAME  = 'U0':HFID   ;* Read frame user exit
+       WRITE.FRAME = 'U1':HFID   ;* Write frame user exit
+     END ELSE
+       CRT 'Assembler mode corrupt!'
+       STOP
+     END
+     *
+     *--- Get starting frame id (FID)
+     *
+     PROMPT ''
+     IF FIELD(BUFF,' ',1) = 'RUN' THEN
+       FID = FIELD(BUFF,' ',4)
+     END ELSE FID = FIELD(BUFF,' ',2)
+     IF FID = '' THEN
+       OK = FALSE
+       LOOP
+         CRT 'Enter FID:':
+         INPUT FID
+         IF FID > '' THEN
+           IF NOT(FID MATCHES '1N0N') THEN
+             CRT 'FID number MUST be an integer numeric!':BELL
+           END ELSE OK = TRUE
+         END ELSE OK = TRUE
+       UNTIL OK DO REPEAT
+       IF FID = '' THEN STOP
+     END
+     GOSUB 1500                ;* Read frame
+     IF FRAME = '' THEN STOP   ;* Exit if not a valid frame number
+     GOSUB 1400                ;* Display 1st page
+     *
+     *--- User input routine
+     *
+     LOOP
+       CRT @(8,22):SPACE(10):@(8,22):
+       INPUT COMMAND,8:
+       IF COMMAND = '' THEN COMMAND = '>'
+       BEGIN CASE
+         CASE COMMAND = 'X'    ;* Exit
+           CRT @(0,0):@(-1)
+         CASE COMMAND = 'F'    ;* File
+           GOSUB 1700
+         CASE COMMAND = 'L'    ;* Edit links
+           GOSUB 1100
+         CASE COMMAND = '>'    ;* Next page of frame
+           GOSUB 1200
+         CASE COMMAND = '<'    ;* Previous page of frame
+           GOSUB 1300
+         CASE COMMAND = '?'    ;* Display help
+           GOSUB 2000
+           GOSUB 1400
+         CASE COMMAND = 'E'    ;* Edit frame
+           GOSUB 1000
+         CASE COMMAND = "N"    ;* Next frame in group
+           IF NOT(ABS.FRAME) THEN
+             IF FWD.LINK+0 > 0 THEN
+               FID = FWD.LINK
+               GOSUB 1500
+               IF FRAME > '' THEN GOSUB 1400 
+             END ELSE
+               ERROR = "There is no forward link for this frame"
+               GOSUB 1900
+             END
+           END ELSE
+             ERROR = "This is not a 'linked' frame"
+             GOSUB 1900
+           END
+         CASE COMMAND = "P"    ;* Previous frame in group
+           IF NOT(ABS.FRAME) THEN
+             IF BCK.LINK+0 > 0 THEN
+               FID = BCK.LINK
+               GOSUB 1500
+               IF FRAME > '' THEN GOSUB 1400 
+             END ELSE
+               ERROR = "There is no backward link for this frame"
+               GOSUB 1900
+             END
+           END ELSE
+             ERROR = "This is not a 'linked' frame"
+             GOSUB 1900
+           END
+         CASE COMMAND = 'SL'   ;* Show links in group
+           IF NOT(ABS.FRAME) THEN
+             SAVE.FID = FID
+             LOOP UNTIL BCK.LINK = 0 DO
+               FID = BCK.LINK
+               FRAME = OCONV(FID,READ.FRAME)
+               BCK.LINK = OCONV(FRAME<1>[13,8],'MCXD')
+             REPEAT
+             CRT ERASE:
+             EXECUTE 'DUMP ':FID:' GL'
+             CRT 'RETURN to continue...':
+             IN REPLY
+             FID = SAVE.FID
+             GOSUB 1500
+             GOSUB 1400
+           END ELSE
+             ERROR = "This is not a 'linked' frame"
+             GOSUB 1900
+           END
+         CASE COMMAND = 'C'
+           GOSUB 1800          ;* Configure arrow keys
+           CRT ERASE:          ;* Clear the terminal
+           GOSUB 1400          ;* Redisplay screen
+         CASE 1
+           IF COMMAND MATCHES "1N0N" THEN
+             FID = COMMAND
+             GOSUB 1500
+             IF FRAME > '' THEN GOSUB 1400
+           END
+       END CASE
+     UNTIL COMMAND = 'X' DO REPEAT
+     STOP
+     *
+     *--- Edit the current frame
+     *
+1000 ECHO OFF
+     QED = FALSE
+     X = H.LX ; Y = H.TY
+     TY = H.TY; LY = H.BY
+     LX = H.LX; RX = H.RX
+     WINDOW = 1
+     LOOP
+       RELINK = FALSE
+       CRT @(X,Y):
+       IN REPLY
+       BEGIN CASE
+         CASE REPLY = 27       ;* Escape
+           QED = TRUE
+           ECHO ON
+         CASE REPLY = 23       ;* Ctrl-W  (toggle active edit window)
+           WINDOW = WINDOW*(-1)
+           IF WINDOW = 1 THEN
+             X = H.LX+((X-LX)*2)
+             TY = H.TY ; LY = H.BY
+             LX = H.LX ; RX = H.RX
+           END ELSE
+             IF X/2 = INT(X/2) THEN X = X-1
+             X = A.LX+((X-LX)/2)
+             TY = A.TY ; LY = A.BY
+             LX = A.LX ; RX = A.RX
+           END
+         CASE REPLY = 20       ;* Ctrl-T  (Goto TOP of window)
+           IF WINDOW = 1 THEN
+              X = H.LX ; Y = H.TY
+           END ELSE
+              X = A.LX ; Y = A.TY
+           END
+         CASE REPLY = 2        ;* Ctrl-T  (Goto BOTTOM of window)
+           IF WINDOW = 1 THEN
+              X = H.RX ; Y = H.BY
+           END ELSE
+              X = A.RX ; Y = A.BY
+           END
+         CASE REPLY = UP.ARROW
+           IF Y-1 >= TY THEN Y = Y-1
+         CASE REPLY = DOWN.ARROW
+           IF Y+1 <= LY THEN Y = Y+1
+         CASE REPLY = LEFT.ARROW OR REPLY = BACKSPACE
+           IF X-1 >= LX THEN X = X-1
+         CASE REPLY = RIGHT.ARROW
+           IF X+1 <= RX THEN X = X+1
+         CASE WINDOW = 1
+           C = CHAR(REPLY)
+           IF INDEX(HEX.LIST,C,1) THEN
+             YPTR = Y-TY+1
+             TEMP.H = HBUFF<PAGE,YPTR>
+             TEMP.H = TEMP.H[1,(X-LX+6)]:C:TEMP.H[(X-LX+8),9999]
+             IF X/2 = INT(X/2) THEN XPOS = X-1 ELSE XPOS = X
+             CX = TEMP.H[XPOS-LX+7,2]
+             LOCATE(CX,SYS.CHARS,1;POS) THEN
+               CX = SYS.CHARS<2,POS>
+             END ELSE CX = ICONV(CX,'MX')
+             Z = SEQ(CX)
+             IF PORT > 0 AND Z > 127 THEN Z = Z - 127
+             IF Z < 32 THEN CX = '.'
+             PTR = A.LX+((XPOS-LX)/2)
+             TEMP.A = ABUFF<PAGE,YPTR>
+             TEMP.A = TEMP.A[1,9+(PTR-A.LX)]:CX:TEMP.A[(PTR-A.LX)+11,9999]
+             CRT @(X,Y):C:@(PTR,Y):CX:
+             HBUFF<PAGE,YPTR> = TEMP.H
+             ABUFF<PAGE,YPTR> = TEMP.A
+             IF (X-LX > 1 AND X-LX < 22) AND (YPTR = 1 AND PAGE = 1) THEN RELINK = TRUE
+           END
+         CASE WINDOW = -1
+           C = CHAR(REPLY)
+           CX = OCONV(C,'MX')"R%2"
+           IF PORT > 0 AND REPLY > 127 THEN REPLY = REPLY - 127
+           IF REPLY < 32 THEN C = '.'
+           YPTR = Y-TY+1
+           TEMP.H = HBUFF<PAGE,YPTR>
+           TEMP.A = ABUFF<PAGE,YPTR>
+           PTR = (X-LX)*2
+           TEMP.H = TEMP.H[1,PTR+6]:CX:TEMP.H[PTR+9,9999]
+           TEMP.A = TEMP.A[1,(X-LX)+9]:C:TEMP.A[X-LX+11,9999]
+           CRT @(X,Y):C:@(H.LX+PTR,Y):CX:
+           HBUFF<PAGE,YPTR> = TEMP.H
+           ABUFF<PAGE,YPTR> = TEMP.A
+           IF (X-LX > 0 AND X-LX < 11) AND (YPTR = 1 AND PAGE = 1) THEN RELINK = TRUE
+       END CASE
+     UNTIL QED DO
+       IF RELINK THEN
+         HEX.IMAGE = HBUFF<1,1>[7,32]
+         CLEAR.FLAG = TRUE
+         GOSUB 1600
+         CRT BUFFER:
+       END
+     REPEAT
+     RETURN
+     *
+     *--- Edit links in current frame
+     *
+1100 IF ABS.FRAME THEN
+       ERROR = "This is not a 'linked' frame. no links to edit"
+       GOSUB 1900
+       RETURN
+     END
+     FLD = 1
+     QED = FALSE
+     LOOP
+       XPOS = LINKS(2,FLD)
+       LGTH = LINKS(3,FLD)
+       CRT @(XPOS,2):SPACE(LGTH):@(XPOS,2):
+       INPUT REPLY,LGTH
+       BEGIN CASE
+         CASE REPLY = 'X'
+           CRT @(XPOS,2):SPACE(LGTH):@(XPOS,2):LINKS(1,FLD):
+           QED = TRUE
+         CASE REPLY = '\'
+           CRT @(XPOS,2):SPACE(LGTH):@(XPOS,2):LINKS(1,FLD):
+           IF FLD > 1 THEN FLD = FLD-1 ELSE QED = TRUE
+         CASE REPLY = "?"
+           ERROR = "Enter new value, '\' to back up, 'X' to exit edit mode"
+           GOSUB 1900
+         CASE 1
+           IF REPLY = '' THEN REPLY = LINKS(1,FLD)
+           IF REPLY MATCHES "1N0N" THEN
+             LINKS(1,FLD) = REPLY
+             HEX.LINK = "(":OCONV(REPLY,'MCDX'):")"
+             CRT @(XPOS,2):SPACE(LGTH):@(XPOS,2):REPLY:
+             CRT @(XPOS,3):SPACE(LGTH):@(XPOS,3):HEX.LINK:
+             HEX.LINKS = OCONV(NNCF,'MCDX')"R%2"
+             HEX.LINKS = HEX.LINKS:OCONV(FWD.LINK,'MCDX')"R%8"
+             HEX.LINKS = HEX.LINKS:OCONV(BCK.LINK,'MCDX')"R%8"
+             HEX.LINKS = HEX.LINKS:OCONV(NPCF,'MCDX')"R%2"
+             HBUFF<1,1> = HBUFF<1,1>[1,8]:HEX.LINKS:HBUFF<1,1>[29,10]
+             ASCII.LINKS = ''
+             FOR I = 9 TO 27 STEP 2
+               C = ICONV(HBUFF<1,1>[I,2],'MX') ;  Z = SEQ(C)
+               IF PORT > 0 AND Z > 127 THEN Z = Z - 127
+               IF Z < 32 THEN C = '.'
+               ASCII.LINKS = ASCII.LINKS:C
+             NEXT I
+             ABUFF<1,1> = ABUFF<1,1>[1,10]:ASCII.LINKS:ABUFF<1,1>[21,6]
+             IF PAGE = 1 THEN CRT @(3,H.TY):HBUFF<1,1>:ABUFF<1,1>:
+             FLD = FLD+1
+           END ELSE
+             ERROR = "Input must be numeric. - use '?' for help"
+             GOSUB 1900
+           END
+       END CASE
+     UNTIL QED OR FLD > 4 DO REPEAT
+     RETURN
+     *
+     *--- Next page of current frame
+     *
+1200 IF PAGE+1 > LAST.PAGE THEN
+       ERROR = "There is no NEXT page to display"
+       GOSUB 1900
+     END ELSE
+       PAGE = PAGE+1
+       GOSUB 1400
+     END
+     RETURN
+     *
+     *--- Previous page of current frame
+     *
+1300 IF PAGE-1 < 1 THEN
+       ERROR = "There is no PREVIOUS page to display"
+       GOSUB 1900
+     END ELSE
+       PAGE = PAGE-1
+       GOSUB 1400
+     END
+     RETURN
+     *
+     *--- Display a page
+     *
+1400 CLEAR.FLAG = FALSE
+     GOSUB 1600
+     BUFFER = @(-1):BGS:@(14,1):FID:@(73,1):PAGE:@(78,1):LAST.PAGE:BUFFER
+     FOR I = 1 TO 16
+       BUFFER = BUFFER:@(3,4+I):HBUFF<PAGE,I>:ABUFF<PAGE,I>
+     NEXT I
+     CRT BUFFER:
+     RETURN
+     *
+     *--- Read frame from disk
+     *
+1500 FRAME = OCONV(FID,READ.FRAME)
+     IF FRAME > '' THEN
+       PAGE = 1
+       KOUNT = 0
+       ABUFF = ''
+       HBUFF = ''
+       HEX.IMAGE = FRAME<1>
+       LHEX = LEN(HEX.IMAGE)
+       ASCII.IMAGE = FRAME<2>
+       ABS.FRAME = (LHEX = 4096)
+       IF ABS.FRAME THEN LAST.PAGE = 8 ELSE LAST.PAGE = 2
+       FOR I = 1 TO LAST.PAGE
+         HPTR = (I-1)*512
+         APTR = (I-1)*256
+         FOR J = 1 TO 16
+           HEX.PTR = HPTR+(J-1)*32+1
+           ASCII.PTR = APTR+(J-1)*16+1
+           ABUFF<I,J> = KOUNT"R#7 :":ASCII.IMAGE[ASCII.PTR,16]:":"
+           HBUFF<I,J> = OCONV(KOUNT,'MCDX')"R%4  ":HEX.IMAGE[HEX.PTR,32]
+           KOUNT = KOUNT+16
+         NEXT J
+       NEXT I
+     END ELSE
+       ERROR = "'":FID:"' is not a valid frame number!"
+       GOSUB 1900
+     END
+     RETURN
+     *
+     *--- Redisplay link fields (If frame in linked mode)
+     *
+1600 IF ABS.FRAME THEN         ;* No link fields for ABS frames!
+       LINKED = 'UNLINKED - ABS FRAME'
+       FOR I = 1 TO 4
+         LINKS(1,I) = ''
+       NEXT I
+     END ELSE
+       LINKED = 'LINKED'
+       FWD.LINK = OCONV(HEX.IMAGE[5,8],'MCXD')
+       NNCF = OCONV(HEX.IMAGE[3,2],'MCXD')
+       BCK.LINK = OCONV(HEX.IMAGE[13,8],'MCXD')
+       NPCF = OCONV(HEX.IMAGE[21,2],'MCXD')
+     END
+     BUFFER = @(39,1):LINKED
+     IF NOT(ABS.FRAME) THEN
+       IF NOT(CLEAR.FLAG) THEN
+         FOR I = 1 TO 4
+           XP = LINKS(2,I)
+           BUFFER = BUFFER:@(XP,2):LINKS(1,I)
+           BUFFER = BUFFER:@(XP,3):'(':OCONV(LINKS(1,I),'MCDX'):')'
+         NEXT I
+       END ELSE
+         FOR I = 1 TO 4
+           XP = LINKS(2,I)
+           SPC = SPACE(LINKS(3,I))
+           BUFFER = BUFFER:@(XP,2):SPC:@(XP,2):LINKS(1,I)
+           BUFFER = BUFFER:@(XP,3):SPC:@(XP,3):'(':OCONV(LINKS(1,I),'MCDX'):')'
+         NEXT I
+       END
+     END
+     RETURN
+     *
+     *--- Write frame back to disk
+     *
+1700 CRT CLERR:@(0,23):'Are you sure ? (Y/N):':
+     INPUT REPLY,3:
+     IF REPLY = 'Y' THEN
+       HEX.IMAGE = FID
+       FOR I = 1 TO LAST.PAGE
+         FOR J = 1 TO 16
+           HEX.IMAGE<2> = HEX.IMAGE<2>:HBUFF<I,J>[7,32]
+         NEXT J
+       NEXT I
+       ERR = OCONV(HEX.IMAGE,WRITE.FRAME)  ;* Do the write
+       HEX.IMAGE = DELETE(HEX.IMAGE,1)     ;* Strip off the fid!
+       IF ERR = '' THEN
+         ERROR = '*ERROR* WRITING FRAME TO DISK!'
+         GOSUB 1900
+       END ELSE
+         ERROR = "Frame '":FID:"' has been filed!"
+         GOSUB 1900
+         IF PAGE > 1 THEN
+           PAGE = 1
+           GOSUB 1400
+         END
+       END
+     END ELSE CRT CLERR:
+     RETURN
+     *
+     *--- Configure keys for use within edit mode
+     *
+1800 CRT ERASE:
+     CRT
+     CRT '    CONFIGURE KEYS TO USE IN EDIT MODE'
+     CRT
+     CRT ' You will be prompted to enter the keys you'
+     CRT ' want to use as the LEFT , RIGHT , UP and'
+     CRT ' DOWN arrow keys while in edit mode.'
+     CRT ' NB: Only single character sequences are supported!'
+     CRT
+     CRT ' LEFT arrow  :':
+     IN LEFT.ARROW
+     CRT '  (':LEFT.ARROW:')'
+     CRT ' RIGHT arrow :':
+     IN RIGHT.ARROW
+     CRT '  (':RIGHT.ARROW:')'
+     CRT ' UP arrow    :':
+     IN UP.ARROW
+     CRT '  (':UP.ARROW:')'
+     CRT ' DOWN arrow  :':
+     IN DOWN.ARROW
+     CRT '  (':DOWN.ARROW:')'
+     MATWRITE ARROW.KEYS ON ERRMSG,FEDIT.KEY
+     RETURN
+     *
+     *--- Print error messages
+     *
+1900 CRT @(0,23):ERROR:" - return to continue:":BELL:
+     IN REPLY
+     CRT CLERR:
+     RETURN
+     *
+     *--- Print help screen
+     *
+2000 CRT @(-1)
+     CRT "                 *** PC PICK 'FRAME EDITOR' ***"
+     CRT  
+     CRT " COMMANDS:  'X'  - Exit the Frame Editor"
+     CRT "            '>'  - Display NEXT page of current frame"
+     CRT "            '<'  - Display PREVIOUS page of current frame"
+     CRT "            'F'  - File the frame just edited."
+     CRT "                   *NOTE* Be VERY sure before you do this!"
+     CRT "            'L'  - Edit links in a frame. ('Linked' frames only)"
+     CRT "            'E'  - Edit the Frame. Defaults to the HEX display area."
+     CRT "            'nn' - Any valid frame number. Will cause specified frame"
+     CRT "                   to be read and displayed. Existing frame is discarded."
+     CRT "            'SL' - Display frame links (If not an ABS frame)"
+     CRT "            'C'  - Configure 'arrow' keys for use in edit mode"
+     CRT "            '?'  - This help message."
+     CRT  
+     CRT " EDITING    Use the arrow keys to move about the active display."
+     CRT "            Note that system delimiters and non-displayable characters"
+     CRT "            are modifed before display in the ASCII display area."
+     CRT  
+     CRT " COMMANDS: '^W'  - Toggle the active edit window.   '^T' - Top of page"
+     CRT "            ESC  - Escape key exits the edit mode.  '^B' - Bottom of page"
+     CRT
+     CRT "Hit any key to continue:":
+     IN DUMMY
+     CRT
+     RETURN
+     *
+     *--- Load the Assembler mode for read/write functions
+     *
+3000 LOOP
+        CRT
+        CRT 'Enter the frame number into which the Assembler mode for'
+        CRT 'the frame read/write functions will be loaded. Be very  '
+        CRT 'sure that this frame is not already being used by other'
+        CRT '3rd party PICK software (eg: word processors ..)'
+        CRT
+        CRT 'Enter ABS frame number or Q to quit:':
+        INPUT FID
+        IF FID > 0 AND FID < 1024 THEN
+           OK = 1  ;* Assume all ok!
+           IF FID < 500 THEN
+              CRT 'This may corrupt your system! - Are you sure':
+              INPUT REPLY
+              IF REPLY # 'Y' THEN OK = 0
+           END
+        END ELSE
+           IF FID = 'Q' THEN
+              CRT 'FEDIT aborted!'
+              STOP
+           END ELSE CRT 'Invalid ABS frame - Must be between 1 and 1023!'
+        END
+     UNTIL OK DO REPEAT
+     GOSUB 4000    ;* Build ABS frame!
+     RETURN
+     *
+     *--- Build/Load the Assembler mode required for read/write functions
+     *
+4000 HFID = OCONV(FID,DTX)"R%3"
+     OBJ = ' FRAME ':FID:VM:' FRM: ':FID:SVM:'000001 7FF00':HFID:SVM:' ORG 2'
+     OBJ<-1> = '*FEDIT.ASM'
+     OBJ<-1> = '*APR 1992'
+     OBJ<-1> = '*02:58:25PM'
+     OBJ<-1> = '*DMM'
+     OBJ<-1> = '*'
+     OBJ<-1> = SVM:'0000 CCCCE94A00E9A601004A8000007F9AD84F00009A491E0000C43E6801'
+     OBJ<-1> = SVM:'0018 C43E680126C605FF81CD00209AF91D00008B166C01A16801F6C28075'
+     OBJ<-1> = SVM:'0030 F6C280750383E80B86E0A3E2008916E400A16E01A3E600B85A10EA09'
+     OBJ<-1> = SVM:'0048 5A10EA091500009AD84F0000800E180020B879209A03150000A10C00'
+     OBJ<-1> = SVM:'0060 00A10C0086E083E8007509A10E0009C07502EB0580261800DF9AD84F'
+     OBJ<-1> = SVM:'0078 DF9AD84F0000B82E029A00150000F6061800107581A112018ED8A144'
+     OBJ<-1> = SVM:'0090 8ED8A14400A3460081CD04009AD84F0000C6060F0082C43E7001BE68'
+     OBJ<-1> = SVM:'00A8 7001BE680181CD00209A12120000EBEEA112018EC081CD040026A144'
+     OBJ<-1> = SVM:'00C0 0026A1440086E083E80186E026A344007E079A4E1E0000EBC39AD84F'
+     OBJ<-1> = SVM:'00D8 C39AD84F00009A491E0000C43E680126C605FE81CD0020BF68019A12'
+     OBJ<-1> = SVM:'00F0 68019A121B0000BEDC009A0C1D00009AD84F0000C7060800000231C0'
+     OBJ<-1> = SVM:'0108 000231C0A30A00A30C00A30E00BE6801B0009A0F120000EBF49A4E1E'
+     OBJ<-1> = SVM:'0120 F49A4E1E0000C43E7001A00F0026880581CD004026803D20720C2680'
+     OBJ<-1> = SVM:'0138 720C26803DFB72382680255FEB119AD84F0000C43E700126C6052E81'
+     OBJ<-1> = SVM:'0150 C6052E81CD00409AD84F0000A112018EC081CD040026A1460086E083'
+     OBJ<-1> = SVM:'0168 0086E083E80186E026A346007E28EB879AD84F0000F60618002075D3'
+     OBJ<-1> = SVM:'0180 002075D3C43E700126803D8072C92680257F81CD004026803D2072AA'
+     OBJ<-1> = SVM:'0198 3D2072AAEBB99AD84F0000BF70019A011B0000E960FE9AD84F0000B8'
+     OBJ<-1> = SVM:'01B0 4F0000B82E029A00150000F6061800107403E949FEC43E780126803D'
+     OBJ<-1> = SVM:'01C8 0126803DFE7403E93CFEBF78019A011B00009AD84F0000C706080000'
+     OBJ<-1> = SVM:'01E0 060800000231C0A30A00A30C00A30E00BE6801B0009A0F120000EBF4'
+     OBJ<-1> = SVM:'01F8 0000EBF4C43E7001A00F0026880581CD0040A112018EC081CD040026'
+     OBJ<-1> = SVM:'0210 CD040026A1440086E083E80186E026A344007F03E9E7FD9A4E1E0000'
+     OBJ<-1> = SVM:'0228 4E1E0000EBAC9AD84F0000800E180010BEDC009A0C1D0000BF68019A'
+     OBJ<-1> = SVM:'0240 BF68019A231B000031C0A30800A30A00A30C00A30E00BE7801B0019A'
+     OBJ<-1> = SVM:'0258 01B0019A0F120000EBF4A10C0086E083E8007C097F0AA10E0009C075'
+     OBJ<-1> = SVM:'0270 0009C07503E99000A10A018ED8BE08009A1E1D0000C43E7001A10C00'
+     OBJ<-1> = SVM:'0288 01A10C0086E0268B550886F239D07F117C11A10E0086E0268B550A86'
+     OBJ<-1> = SVM:'02A0 8B550A86F239D07602EB5DA112018EC026C7064400020081CD0400C4'
+     OBJ<-1> = SVM:'02B8 CD0400C43E7001268B450C86E0998B0E0C0086E939D17F0C7C0C8B0E'
+     OBJ<-1> = SVM:'02D0 7C0C8B0E0E0086E939C17202EB0CA112018EC026C706440008009AD8'
+     OBJ<-1> = SVM:'02E8 08009AD84F000080261800EF800E0C008031C08B0E0C008B160E009A'
+     OBJ<-1> = SVM:'0300 160E009A241D00009AD84F0000EA06150000CCCCCCCCCCCCCCCCCCCC'
+     WRITE OBJ ON ERRMSG,'FEDIT.ASM'
+     * Now load the object item into ABS area!!
+     EXECUTE 'MLOAD ERRMSG FEDIT.ASM' CAPTURING CAPT
+     RETURN
+*
+     END
