@@ -1,0 +1,88 @@
+
+                   PICK SUPPORTED COMPONENTS FOR R83
+
+
+ BIOS:          Phoenix, Award and AMI (American Megatrend Inc)
+
+
+ HARD DISK:     MFM, RLL, ESDI, SCSI, and IDE
+
+
+                INT13 is utilized for all hard disk operations and
+                therefore can support these drives without having native
+                drivers.  Many hard disk controllers replace the
+                computer's BIOS INT13 support with built-in BIOS INT13 
+                support.  PICK can use these controllers to access RLL,
+                ESDI, SCSI, IDE, and other types of drives.
+ 
+                Some controllers and drives may support fewer cylinders,
+                sectors and heads than the PICK BIOS INT13 Interface.
+                The values are then limited by the PICK BIOS INT13
+                Interface.
+
+                Hard disk support is limited by the hard disk
+                controller, by the hard disk, by the PICK BIOS INT13
+                Interface, and by the computer's or any built-in BIOS
+                INT13 Interface.  The PICK BIOS INT13 Interface is
+                defined as:
+
+                The max. number of cylinders is 1024 (0-1023) 10 bits
+                are used for the number of cylinders
+                The max. number of sectors is 64 (0-63) 6 bits are used
+                for the number of sectors
+                The max. number of heads is 64 (0-63) 4 bits are used
+                for the number of heads
+                The max. number of drives is 2 (0-1) 1 bit is used for
+                the drive number
+
+             NOTE: This will give maximum disk storage of 2Gb
+                (1024x64x64x512) per drive, assuming INT13 supports
+                logical sector, head and cylinder.
+
+                If your disk drive exceeds these limits, you must have a
+                disk controller that subsititutes its own INT13 drivers
+                and transparently makes access to the drive conform to
+                these limits.
+
+
+ SERIAL CARDS:  PICK must have an installed driver for each serial card
+                it supports.  Most of the drivers for the cards listed
+                are internal to PICK, yet a few have their own external
+                drivers.  See Installation Guide, for all Serial Card
+                settings.
+ 
+                PS/2 Systems - ARNET Multiport 2/8-way, COMTROL Hostess
+                MC/4/8, DigiCHANNEL MC/8/16, DYSSA DESMA-4, MONOLITH
+                Flexcom 8002
+
+                AT Systems - IBM Serial/Parallel, ALR Basic Time AT 4X4,
+                ALR Challenger, ALR Two port, ARNET Modular 8-way, ARNET
+                Multi-4 & Plus4 Exp, AST Advantage, AST Cluster Adapter,
+                AST FourPort /AT & /XN, BRISTOL RESEARCH 8-Way, COMTROL
+                Hostess 4/8-way, DigiCHANNEL PC 4/8/16, DIGIGRAPHICS
+                Extend Com8, HAAR Quadport, MONOLITH Flexcom 8000, PAC
+                Wizard 4/8, BOCA IO/AT 2S/1P
+
+
+ 1/4" TAPE:     Quarter inch streaming cartridge tape drives need
+                 device drivers already installed with PICK.   The 1/4"
+                 tape controller must be set to IRQ5 (INTx'D').  Port
+                 address must be x'338', x'310, x'312'.
+
+                 PS/2 Systems - ARCHIVE 409/60mb External (VP), Sankyo
+                 60/150mb Internal/External, EVEREX 150mb External, GIGA
+                 TREND 1gb 139 External, TECMAR QT60e/QT90e/QT125e,
+                 TENSE LECTRONIX CORP Legacy 150mb Internal/External
+
+                 AT Systems -  Sankyo 60/150mb Internal/External, CIPHER
+                 5400, CIPHER 60mb External, COLORADO MEMORY SYSTEMS
+                 150mb Internal (QFA500), EVEREX Excel-Stream 60mb
+                 Internal/External D.05E Firmware, EVEREX 120/150mb
+                 GIGATREND 137/138 Internal/External, MONOLITH 6000 60mb
+                 Internal, TECMAR QIC-60 Internal/External, TECMAR
+                 QT60e/QT90e/QT125e/QT150e/QT250e QT125i, TENSE
+                 LECTRONIX CORP Legacy 45/60/150mb External, WANGTEK
+                 PC-36 Kit 60/120/150mb Internal
+
+                    --  end  --
+

@@ -1,0 +1,605 @@
+File FRAMES.TXT
+
+Downloaded from The PICK BBS on 07-JAN-93 at 14:58
+<<< Press RETURN to cancel >>>
+
+  
+                     PICK SYSTEMS TECHNICAL SUPPORT BULLETIN
+   
+                                 ABS Frame Usage
+                               R83 2.2  Jul-08-88
+                               R83 3.0  Mar-01-89
+                               R83 3.0  Sep-04-89
+                               R83 3.1  Jul-04-90
+                               R83 3.1  May-01-91
+
+   There have been numerous books and periodicals published in which the frame
+   usage for ABS has been listed.  Often the list is incomplete and/or
+   incorrect.  To prevent further confusion on this issue, the following list
+   is provided.  Primarily this will be of use to application/system
+   programmers who have often wanted to know exactly what each Pick ABS frame
+   was used for.
+   
+   SUBJECT TO CHANGE
+   The frames shown with an accompanying asterisk (*) indicate they are used by
+   Pickware products, and are listed here only for reference. 
+   The Pickware developer should be contacted directly for their actual frame 
+   usage.
+
+   Note: "EP" = Entry Point
+   
+   001 Debugger           Entry points for errors (ie. ILLEGAL OPCODE, etc...)
+   002 TCL                TCL2 verb EP
+   003 File mgmt          Get item, Get next item (LIST), Get next sequential
+                          item, Xmode for GFE
+   004 TCL                Workspace Init, IS init, TS init, Init HS,IS,OS triad
+   005 TCL                MD1 wrapup, Proc Execution, TCL init
+   006 TERMIO             Readlin, Writlin, WritOB, Getbuf, Readlinx, PCRLF,
+                          FF delay
+   007 File mgmt          Retrieve Item (RETIX), Link frames
+   008 Numeric            Math conversions (XTD,DTX CVaaa etc....)
+   009 TERMIO             Header information.
+   010 TCL                Wrapup frame, :STARTSPOOLER verb EP, LIST-LOCKS verb
+                          EP
+   011 File mgmt          Update items, Xmode for GFE.
+   012 TCL                Print Errmsg item
+   013 Editor             EDitor verb EP
+   014 Editor             List or Update commands
+   015 Editor             Locate, G/N/U/B commands, List a line
+   016 Editor             EX, F, FS,FI,FD and Item length
+   017 Editor             Merge, File to another item.
+   018 Editor             Prestore,Recover-fd,Errmsgs,Switches for Assembler,
+                          Columns
+   019 Editor             List management (ie. Edit-list, etc...)
+   020 Editor             X,XF EOI message, and various other messages
+   021 Tables             Disk errors
+   022 Assembler          TEXT opcode processor, get argument field #2 data,
+                          get hex values (X'FE'),
+   023 Assembler          Pass number 1
+   024 Assembler          Part of assembly process
+   025 Assembler          Macro expansion
+   026 Assembler          Generates return offsets, Continuing assembly (list)
+   027 Assembler          ORG, align location counter on even boundary
+   028 Assembler          Second pass of assembler, write the item.
+   029 Assembler          Get the OpCode
+   030 Assembler          Jumps, Binary to radix, radix to binary.
+   031 Assembler          MLOAD verb EP, MVERIFY verb EP
+   032 Assembler          MLIST verb EP
+   033 Overflow           Get number of requested frames
+   034 Overflow           Attach-Release-Verify links and frames.
+   035 Tape               T-REW verb EP,Write, WEOF, Back, Check, T-FWD/T-BCK
+                          verb EPs
+   036 Tape               T-WEOF EP, T-RDLBL verb EP, Next tape
+   037 Tape               T-DUMP verb EP, next reel
+   038 Utility            ASCII, EBCDIC
+   039 Utility            Compare, Sort
+   040 TCL Acctng         Logon, Logto
+   041 PROC               Entry, Label processing, GO processing
+   042 PROC               F,B,S, get parameter form IB
+   043 PROC               IF E, Pattern matching, GO statement
+   044 PROC               IP, RI,RO,Dn
+   045 PROC               PP,PW, IT,STON
+   046 PROC               Proc xfer, Cursor
+   047 Restore            Account-Restore, Sel-Restore
+   048 File mgmt          Group locks, unlocks
+   049 PrintIO            SET-LPTR verb EP
+   050 TCL Acctng         OFF verb EP, Update the ACC file, LOGTO verb EP
+   051 TermIO             Set time/date, set privilege level
+                          Set up term characteristics, T-FWD/T-BCK verb EPs
+                          T-RDLBL verb EP, T-REW verb EP, T-WEOF verb EP, T-
+                          WTLBL verb EP
+   052 Utility            Debug verb EP to output the message, MESSAGE verb EP
+   053 English Compiler   Check complete LIST,SORT syntax, Common verb EP for
+                          SORT/LIST & SORT-LABEL/LIST-LABEL/ T-FWD/T-BCK/T-
+                          LOAD/T-DUMP/:SWD/:SWE
+   054 English Compiler   Test for HEADING/FOOTING options
+   055 English Compiler   Check for valid conectives, and retrieve item from
+                          DICT if not 'DICT' retrieval
+   056 English Compiler   Start of actual listing
+   057 English Compiler   Qualifying attributes (ie. output specifications),
+                          Setup for attribute definition items (A,S,X,Q)
+   058 English Compiler   Translate conversions,F-correlative, Qselect, Break-
+                          on, Grand-total
+   059 English            SORT criteria from ERRMSG SEQ item
+   060 English Compiler   Conversion and D2 processing
+   061 TermIO             SET-PORT verb EP, change baud.
+   062 English Compiler   Test for >, <, = etc...
+   063 English Compiler   A-correlative processing
+   064 English Compiler   Translate, F-correlative, A-correlative
+   065 Utility            Lock/Unlock frame
+   066 Utility            DUMP verb EP
+   067 Utility            PRINT-ERR verb EP, Memory dump
+   068 English Compiler   A-correlative processing, :SWD verb EP
+   069 English Compiler   And connective, :SWE verb EP
+   070 English Compiler   Copies IS string to the OS, any elements in the
+                          string are copied preceding other elements.  Values
+                          are converted if  conversion specified, unless the
+                          attribute has a break-on connective
+   071 English            Part 1 of the columnar listing output
+   072 English            Part 2 of the columnar listing output
+   073 English            Part 1 of non-columnar listing output
+   074 English            non-columnar listing output  and Tn or Tn,n
+   075 English            Part 2 of non-columnar listing output.
+   076 English            Tn or Tn,n and control-break item.
+   077 English            First entry from selection processor.  If data will
+                          fit in current page width then non-columnar
+                          processor is entered, LIST verb EP, LIST-ITEM verb
+                          EP, LIST-LABEL verb EP, SORT-LABEL verb EP
+   078 English            SORT verb EP, SORT-ITEM verb EP,right justification
+   079 English            Correlative, f-correlative
+   080 Batch              Delete processor
+   081 Batch              Process time/date
+   082 Batch              B/ADD
+   083 Batch              Update
+   084 Batch              String handler, add/delete
+   085 Batch              Multi-value processing
+   086 Batch              Locks, number conversions
+   087 Batch              Input data for batch processor, from disk or tape
+   088 Batch              Value testing
+   089 Debug              Arithmetic (XTD, DTX), Trace Table
+   090 English Conversion T/G/C/MC/MX/Iconv/Xconv
+   091 English Conversion Iconv date, set-date format (US or International)
+   092 English Conversion Julian date, format date.
+   093 English Conversion External date conversions
+   094 English Conversion G/C processing code, Hex conv
+   095 English Conversion Mask function
+   096 TCL Acctng         Charges, password
+   097 English            P,L,D,U,R,N for HEADING, BREAK-ON
+   098 English            Break processing
+   099 English Conversion F-correlative, Total, concatenation
+   100 List Mgmt          GET-LIST verb EP, SAVE-LIST verb EP, DELETE-LIST
+                          verb EP
+   101 English Conversion F-correlative, Multi-value tests, Operator test (ie.
+                          +,<, [,],(,P etc...), scaling, summation
+   102 English Conversion WITH clause (OR/AND)
+   103 English Selection  Sort, Value testing, Left/Right justification
+                          compare, Wildcard string (ie.  WITH NAME "WIL]")
+   104 English Selection  Sort, Correlative processing
+   105 English Selection  Select processor with various and sundry access
+                          modifiers/connectives, COUNT verb EP
+   106 English Utility    HASH-TEST verb EP, ISTAT verb EP
+ * 107 Tape               Hooks for 1/2" tape
+   108 List mgmt Editor   COPY-LIST verb EP, Get destination
+   109 List mgmt          DELETE-LIST verb
+ * 110 ( Reserved )       PC-Cache has been using this frame
+   111 English            WITHIN processor
+   112 English Conversion User-Exit processing
+   113 English Conversion LPV,Summation, F-correlative
+   114 English Conversion SORT-ITEM, Call from Basic, MCN, MCU conversion
+                          etc..., Mainlink terminal, I/O, List filed
+   115 Tape               T-LOAD verb EP, Scan to next item on tape
+   116 English            T-LOAD data retriever
+   117 ( Reserved )       Sample Assembly Langauge program.  Provided with the
+                          ASSEMBLER ACCOUNT.
+   118 English Selection  SORT, Build select list
+   119 ( Reserved )
+   120 English Conversion Time conversion, MC conversions, MD conversions
+   121 Utility            WHERE verb EP, WHAT, User-Exit for Where information
+   122 Utility            SLEEP verb EP, RQM (Release Time Quantum), TERM verb
+                          EP
+                          Possible problem with RQM in v3.0
+   123 English Conversion Conversion Errors, ISTAT processor, MP conversion
+   124 English Utility    T-DUMP label writing, GRAND-TOTAL processing if
+                          needed.
+   125 English            SORT-LABEL/LIST-LABEL verb EP and prompt for
+                          parameters.
+   126 File mgmt          Disk errors table, Group lock table.
+   127 Overflow Table     System base/mod/sep/maxfid links/contiguous overflow
+                          terminal parameters, system locks (System lock,Lock
+                          this frame, Group lock table, Linking workspace,
+                          Save, MSG processor, Proc user-exit.
+   128 TermIO             TABS verb EP, P verb EP, TB in editor, STRIP-OBJECT
+                          verb EP, ECHO verb EP
+   129 English Conversion Pattern matching, Range function, Length, S
+                          substitution, Illegal conversion
+   130 ( Reserved )
+   131 Debug              Set Break points, Trace table
+   132 Debug              Command parse
+   133 Debug              Symbol table check/display
+   134 Debug              Display (C=character, I=Integer, X=Hex, L=links,
+                          B=bits)
+   135 Debug              Output
+   136 Debug              Leave the Debugger, Entry for Debugger
+   137 Debug              Set-Symbol-table, Print links, window specs, error
+                          message
+   138 Debug              G resume processing, links processing
+   139 Debug              Trace output, generate Trace form, print reason for
+                          abort
+   140 File mgmt          COPY verb EP, Item overflow xmode, COPY item TO:,
+                          check for a D pointer.
+   141 File mgmt          CREATE-FILE verb EP, file creation code, scan for
+                          'DICT' in file name, XTD subroutine.
+   142 File mgmt          COPY to terminal or printer, LIST-ITEM/SORT-ITEM,
+                          null header
+   143 File mgmt          CLEAR-FILE verb EP, DELETE-FILE verb EP, MLOAD
+                          subroutine
+   144 Utility            :SWE/:SWD verb EPs switch, Link primary space of
+                          file, GFE message, Deal with no overflow problem,
+                          Execute LOGON proc
+   145 Assembler          STRIP-SOURCE & STRIP-OBJECT verb EP, MVERIFY verb EP
+   146 Assembler          Scan for match on Operand field, prompt for
+                          reference name
+   147 Assembler          Test for Decimal expression, Text opcode processor,
+                          calculate label address, Stop assembly on error.
+   148 File mgmt          Get file parameters
+   149 Assembler          Count lines with comments/object code/*ERR
+   150 Tape               Link frames, Setup tape buffers
+   151 Tape               Flush tape buffers, QI read/write, QI tape status
+   152 Assembler          Include, Comment, label check
+   153 Tape               T-WTLBL verb EP, T-READ verb EP, Print Reel #, Print
+                          Label
+   154 Tape               Tape errors, T-EOD verb EP, T-CHK verb EP, T-RDLBL
+                          verb EP, T-WTLBL verb EP
+   155 Tape               Tape status (primary),  Set up size (Floppy)
+   156 Tape               T-FWD/T-BCK, T-ERASE verb EP, T-RETEN verb EP
+   157 Debug              Display break conditions
+   158 Utility            Get options (nnnnn, Test for stacked input for PROC
+   159 Utility            Convert option string, Output display to terminal
+   160 Utility            Hex/Decimal arithmetic, XTD/DTX verbs, ITEM/GROUP
+                          verbs
+   161 Spooler            Edit, Holdfile to File item, Spool T/TN
+   162 Spooler            Tape, Holdfile to tape, Align
+   163 Spooler            Printer, S option on STARTPTR
+   164 Spooler            Terminal I/O, SP-CLOSE verb EP
+   165 Spooler            Printer, Output a string to printer/file, Print job
+                          EP
+   166 Spooler            SP-STATUS verb EP, Tape attachment message, Output
+                          Entry#, Put job on disk, Hold file message
+   167 Spooler            SP-CLOSE verb EP, SP-ASSIGN verb EP, SP-OPEN verb EP
+   168 Tape               T-ATT/T-DET verb EP, Output a file from tape
+   169 Spooler            Edit, SP-EDIT verb EP, Release hold entry from !END
+   170 Spooler            Printer, Lock/Unlock jobs, check for Align
+   171 Spooler            LISTPEQS verb EP, Check ownership
+   172 Utility            Link workspace, LINK-WS verb EP, Sleep
+   173 Spooler            STOPPTR verb EP, SP-KILL verb EP, Delete a printer,
+                          Printer stop message
+   174 Spooler            LISTPTR verb EP, SP-ASSIGN, LISTABS verb EP
+   175 Spooler            Init, :STARTSPOOLER verb EP, Close all file(s) for
+                          this line, Attach the tape if required.
+   176 Spooler            Initialize Printer PCB,
+   177 Spooler            Initialize overflow, String function from SP-EDIT
+   178 Spooler            STARTPTR verb EP, Test parallel printer device
+                          address
+   179 Spooler            Align termination, check printer control block
+   180 Spooler            Tape, PRINTRONIX verb EP, SP-TAPEOUT verb EP
+   181 Spooler            Output bits for LISTPEQS (status, name, date etc...)
+   182 Spooler            Printronix verb, Generates the options for LISTABS,
+                          LISTPEQS,LISTPTR, SP-EDIT and SP-KILL, :STARTSPOOLER
+                          verb EP
+   183 Spooler            Message extensions for SP-STATUS
+   184 Spooler            Serial Printer, Output block
+   185 Utility            SOUNDEX, International currency conversion, BREAK-
+                          ON/OFF Verb EP.
+   186 System             System priorities (BATCH, SLICE, INTER better left
+                          alone), PEEK/POKE memory User-Exits, User-Exit to
+                          READ/WRITE from/to memory, Format a floppy, REBOOT
+                          system, SET-KBD to change line 0 keyboard
+   187 Utility            WHO/WHAT/POVF verb EPs, Get MaxFid
+   188 Basic Compiler     EQU/DIMension, List an error line, Function variable
+                          table search, Output a string
+   189 Basic Compiler     CATALOG verb EP, Illegal opcode, Illegal subscript,
+                          Bad Stack Descriptor
+   190 Basic Compiler     Compiler verb EP, CALL/RETURN, Branch true/false,
+                          Label, User-exits
+   191 Basic Compiler     Match, Number, User-exit, Generate label, Space
+                          check, String check ( "'",'"','\')
+   192 Basic Compiler     Second Pass, Label insert to symbol table, Error
+                          codes, Subroutine flag
+   193 Basic Compiler     Second Pass part 2, EQU/DIM/COMMON, Error codes
+   194 Basic Compiler     Third Pass, EQU/DIM/COMMON dimensioned (ie.
+                          CUST(20)), Label offsets, String loads, Error
+                          messages (Has not been dimensioned, etc...)
+   195 Basic Compiler     PRECISION/DIMension/COMMON dimensioned, Test for Max
+                          variables (32260 bytes)
+   196 Basic Compiler     Print Sysmbol map, Save symbol table
+   197 Basic Compiler     Print intermediate object code, Generate cross-
+                          reference in BSYM
+   198 Basic Compiler     BNF calls, test for label
+   199 Basic Compiler     INCLUDE functions, Reserved names
+   200 Save               SAVE verb EP, ACCOUNT name prompt
+   201 Save               Check item for D code, Setup for FILE-STATS
+   202 Save               Scan file for items, Initialize group statistics,
+                          Build statistics for file, check for valid links
+   203 Save               Close tape file and start new segment, Check D/CODE,
+                          Write segment mark followed by XC or  XX (XC file
+                          Continuation or X for end)
+   204 Save               Put item in STAT-FILE, Summarize group statistics
+   205 Save               LIST-LOCKS verb EP, WHERE verb subroutine
+   206 Save               Pointer item header (CC or CL)
+   207 Save               Check locks, Save
+ * 208 Mainlink
+   209 Restore            Restore, get frame ids.
+   210 Restore            Search for next D/CODE, Principal EP for loading
+                          files
+   211 Restore            Initialize OVF, Restore
+   212 Restore            Create a file, Set stack to new file, attach frames
+   213 Restore            Continue handling D/CODE item, Restore a Q item,
+                          Finish creating a file
+   214 Restore            Put item in a file, attach frame for group,
+                          Overwrite item that matches item, Complete
+                          generation of file by fast  method (No file re-
+                          sizing)
+   215 Restore            Account name compare, Get account name for SEL-
+                          RESTORE, ITEM ON FILE message, ACCOUNT-RESTORE/SEL-
+                          RESTORE verb EP
+   216 Restore            D or Q type segment handling, SEL-RESTORE setup
+                          (items options)
+   217 Restore            Build an Object pointer item, Reconstruct object code
+   218 File mgmt          GFE handling, GFE test, Report GFE and ENT DEBUGGER
+   219 Restore            Item-Size error reporting, I segment (Item) on tape
+                          error, Object error, Unidentifiable tape segment,
+                          SYSTEM DICT not found, No overflow available
+   220 Restore            End of Restore during or after files section, Reset
+                          all System locks, Restore workspace pointers
+   221 Assembler
+   222 ABS                Secure a JET  ABS frame
+   223 ABS                Security for JET
+   224 Basic              Program verify from Debugger, CATALOG/DECATALOG  Out
+                          of workspace
+   225 Basic              BCALL, CALL EP, CALL return, Pass MAT array,
+                          SUBROUTINE validation,
+   226 Basic              Run-time errmsgs, Compiler errmsgs
+   227 ( Reserved )
+   228 Basic              Dynamic, LOCATE/INSERT/REPLACE/EXTRACT/DELETE
+                          functions
+   229 Basic              Storage, Abandon data buffers, Garbage collect
+                          poutine, Get data buffer,  Will allocate a buffer if
+                          enough free space is available or report NOT ENOUGH
+                          WORKSPACE
+   230 Basic BRP00        Determines whether a RUN or CATALOG, setup
+                          descriptor table starting in the 7th frame of IS,
+                          Stack is stored starting in the 7th frame of HS and
+                          is 4 frames long, Free space starts in  the 14th
+                          frame of HS.
+   231 Basic BRP01        Stack operations, GOSUB/RETURN/RETURN TO/ FOR NEXT
+                          functions, Setup variable type (NUM/String/indirect
+                          string/ File B/M/S
+   232 Basic BRP02        DELETE/CLEARFILE/READs/WRITEs
+   233 Basic BRP03        ABS/RQM/CAT/PRINTER functions
+   234 Basic BRP04        TAB/SPACE/MATCH/CHAR/FIELD/COL1/COL2/INT/SEQ/CRT
+   235 Basic BRP05        LEN/MAT/ICONV/OCONV/ PAGE/STR/TIMEDATE/TIME/
+                          INDEX/MATWRITE/divide functions
+   236 Basic BRP06        INPUT/OR/NOT/LEQ/AND/MULITPLY/ADD/LES/EQU/IN/OUT
+   237 Basic BRP07        READT/WRITET/WEOF/REWIND/OPEN/MATREAD
+   238 Basic BRP08        CLEAR-BASIC-LOCKS/RANDOM/
+                          LOCK/UNLOCK/RND/TRIM/PROCREAD/PROCWRITE
+                          NOTE: in v3.0, there is a bug in RND() which caused
+                          it to not verify this frame.
+   239 Basic BRP09        SIN/COS/TAN/SQRT functions
+   240 Basic BRP10        ON GOTO/ON GOSUB functions/Format functions (Mask)
+   241 Basic BRP11        MAT/COUNT/RELEASE/DATA/EXIT/
+                          HEADING/PROMPT/CLEAR/CHAIN/ DATE/FOOTING/BREAK
+                          functions
+   242 Basic BRP12        LOCATE/XTD/DTX functions/Abandon buffers for CHAIN
+   243 Basic BRP13        Multiply/Divide/INTEGRAL POWER/ALPHA functions
+   244 Basic BRP14        LN/EXP/PWR/STOP functions
+   245 Basic BRP15        SYSTEM(n)/ENTER/cursor/READT
+   246 Basic BRP16        SELECT/READNEXT/ASCII/EBCDIC functions
+   247 Basic BRP17        INPUTNULL/ Edit INPUT functions
+   248 Basic BRP18        CLEAR/DATE/LEN/NUM/EXT errors/ Load variable from
+                          stack
+   249 Basic BRP19        Constants - EXP/LEN/PRECISION
+   250 Basic              BNF
+       :
+   263 Basic              BNF
+   264 Basic Debugger     Break check/Calculate line number/
+   265 Basic Debugger     Locate symbol table/Print variable value,  Pverify
+   266 Basic Debugger     E mode/N mode/END or OFF/Get line number for
+                          operator/Close printer/ Display stack/Command parsing
+   267 Basic Debugger     Display/change/trace/untrace and Breakpoint  look-up
+   268 Basic Debugger     Turn off/on trace, Enter Trace/ Delete Trace/ Print
+                          Breakpoint/Initialize Trace table
+   269 Basic Debugger     Set up Break code table/ Break parse routine
+   270 TermIO             SET-BAUD/TA-ON/TA-OFF/FC-ON/FC-OFF/TA/FC verb EPs
+   271 Assembler          Monitor loader
+   272 Assembler          Monitor tape transfer
+   273 Basic Debugger     Delete Break points/Go to a statement/continue
+   274 Basic Debugger     Process L or Z commands
+   275 Basic              OPCODES
+   276 Utility            ABS frame info
+   277 File mgmt          DELETE-FILE DATA/ Find M/DICT entry in MD
+   278 ATP                LOGON/LOGOFF verb EPs, User-Exit EPs for Logging
+                          ON/OFF ports
+   279 ATP                CHECKSUM/BLAST and various ATP routines
+   280 ATP                CHECKSUM/BLAST and various ATP routines
+   281 ( Reserved )
+   282 ATP                Inhibit/unihibit break key
+   283 Utility            Virtual memory diagnostic
+   284 ATP                Virtual memory diagnostic part 2
+   285 ( Reserved )
+   286 ATP                Error messages-Out of overflow/Mem Err Buffer/Aborted
+   287 ATP                Number of comm lines
+   288 Utility            DUMP/LOAD tape functions
+   289 Utility            CHECK-SUM verb EP
+   290 ATP                Fault/Arith programs
+   291 RUNOFF             Some RUNOFF functions (.INPUT/.FILE/.HEADING/etc.)
+   292 RUNOFF             Some RUNOFF functions (.INPUT/.FILE/.HEADING/etc.)
+   293 RUNOFF             Some RUNOFF functions (.INPUT/.FILE/.HEADING/etc.)
+   294 RUNOFF             Some RUNOFF functions (.INPUT/.FILE/.HEADING/etc.)
+   295 RUNOFF             Some RUNOFF functions (.INPUT/.FILE/.HEADING/etc.)
+   296 RUNOFF             Some RUNOFF functions (.INPUT/.FILE/.HEADING/etc.)
+   297 RUNOFF             Some RUNOFF functions (.INPUT/.FILE/.HEADING/etc.)
+   298 RUNOFF             Some RUNOFF functions (.INPUT/.FILE/.HEADING/etc.)
+   299 RUNOFF             Some RUNOFF functions (.INPUT/.FILE/.HEADING/etc.)
+   300 English            REFORMAT verb EP.
+   301 Utility            Abort messages.
+   302 Utility            System messages
+   303 Utility            Editor messages
+   304 Utility            Spooler messages
+   305 Utility            DUMP messages
+ * 306 Utility            1/2" Tape messages (Kraft)
+   307 Utility            Miscellaneous messages
+   308 Utility            Responses to messages
+   309 Utility            Basic Debugger messages
+   310 Utility            Spooler messages part 2
+   311 Utility            English messages
+ * 312 CompuSheet+
+ * 313 CompuSheet+
+   314 Translator         
+   315 Tape               Floppy status, logical rewind, logical backup,
+                          logical forward & read of a sector, logical/physical
+                          read of sector,  Write an EOF, Write data,
+                          Forward/backward a file
+ * 316 Tape               Floppy buffering, hooks for 1/2" tape, SET-FLOPPY,
+                          T-STATUS EP
+   317 Tape               Tape buffers
+   318 IBM DOS            For COPYDOS
+   319 ABS/MON            Creates ABS-Monitor
+   320 Execute            Initialize EXECUTE control structure
+ * 321 Execute            More Execute
+                          ( Jet overlays;  Mismatch on VERIFY-SYSTEM ) -
+                          requires P/W-04 to fix it.
+   322 Execute            More Execute
+   323 Execute            More Execute
+   324 Execute            More Execute
+ * 325 Assembler          1/2" Tape (Kraft)
+   326 Assembler
+   327 Assembler
+   328 Assembler
+   329 Assembler
+   330 ( Reserved )
+   331 ( Reserved )
+   332 ( Reserved )
+   333 ( Reserved )
+   334 ( Reserved )
+   335 ( Reserved )
+   336 ( Reserved )
+   337 ( Reserved )
+   338 Assembler          MLIST verb EP
+   339 Basic              Build an Indirect pointer
+ * 340 Jet
+ *     :
+ * 380 Jet
+   381 Utility            COMPARE verb EP
+   382 Utility            Compare setup/display, tape setup
+   383 Utility            File compare
+   384 Tape               T-VERIFY Verb
+   385 Tape               T-VERIFY Verb
+   386 Tape               T-VERIFY Verb
+   387 Tape               T-VERIFY Verb
+   388 Tape               T-VERIFY Verb
+   389 Tape               T-VERIFY Verb
+   390 Tape               T-VERIFY Verb
+   391 Tape               T-VERIFY Verb
+   392 Tape               T-VERIFY Verb
+   393 Tape               T-VERIFY Verb
+   394 ( Reserved )
+   395 ( Reserved )
+   396 ( Reserved )
+   397 Assembler          Assembler user-exits
+   398 Save               Save processor
+   399 Terminal           AccuSoft cursor information
+                          Accu-Cursor INIT-CURSOR bug -
+                          ED ERRMSG CHECK-SUM, and change line 399
+                          fm B695, 0-E, 146-7FF
+                          to B695, 0-D, 7FF
+                          and File it.  Then, do:
+                          VERIFY-SYSTEM (O).
+   400 Infact             Math U0190 (CALC2)
+   401 Infact             Locks U0191,U1191,U3191
+   402 Infact             FORMAT2 U0192
+   403 Infact             Proc utility, Send output to line printer
+   404 ( Reserved )
+   405 Infact?            Retrieve item, test select, get file BMS
+   406 ( Reserved )
+   407 Infact             TRANS1 Move Output buffer to Input buffer
+ * 408 AccuPlot
+ *     :
+ * 417 AccuPlot
+   418 Infact             KERNEL2  User-exits U01A2 NWAY U11A2 force leading
+                          000 etc.
+   419 Infact             POOL2  Open file, swap characters, read field
+                          User-Exit 01AD bug in v2.2 - see IH-03
+ * 420 CompuSheet+
+ * 421 CompuSheet+
+   422 Infact             CURSUR  Cursor functions
+ * 423 CompuSheet+
+ * 424 CompuSheet+
+ * 425 CompuSheet+
+ * 426 CompuSheet+
+ * 427 CompuSheet+
+ * 428 CompuSheet+
+   429 Infact             TRANS2  More Infact
+ * 430 AccuPlot
+ *     :
+ * 459 AccuPlot
+ * 460 CompuSheet+
+ * 461 CompuSheet+
+ * 462 CompuSheet+
+ * 463 CompuSheet+
+ * 464 CompuSheet+
+ * 465 CompuSheet+
+ * 466 CompuSheet+
+ * 467 CompuSheet+
+   468 ATP                ATP
+   469 ATP                ATP
+ * 470 Mainlink
+ *     :
+ * 486 Mainlink
+ * 487 CompuSheet+
+ *     :
+ * 511 CompuSheet+
+   - - - - - - - - - - - - - - - - - - - - default frame limit on v1.0, v2.0
+ * 512 Jet
+ *     :
+ * 559 Jet
+ * 560 Mainlink
+ *     :
+ * 590 Mainlink           Keyword v1.0
+ * 591 Mainlink           :
+   594 TCL Stack          :
+   595 TCL Stack          :
+   596 TCL Stack          :
+   597 TCL Stack          :
+   598 TCL Stack          :
+   599                    :
+ * 600 Keyword            :
+ *     :                  :
+ * 703 Keyword            Keyword v1.0
+   704 ( free )
+   - - - - - - - - - - - - - - - - - - - - default frame limit on v2.1,  v2.2,
+   v3.0
+   705 ( Reserved )
+   706 ( Reserved )
+   707 ( Reserved )
+   708 ( Reserved )
+   709 ( Reserved )
+ * 710 Via Systems
+ *     :
+ * 770 Via Systems
+   771 ( Reserved )
+       :
+   899 ( Reserved )
+   900 T-VERIFY
+   901 T-VERIFY
+   902 T-VERIFY
+   903 T-VERIFY
+   904 T-VERIFY
+   905 T-VERIFY
+   906 T-VERIFY
+   907 T-VERIFY
+   908 T-VERIFY
+   909 T-VERIFY
+   910 T-VERIFY
+   911 ( Reserved )       Pick Systems is reserving these frames for future
+                          implementations.
+       :
+   1023 ( Reserved )
+   - - - - - - - - - - - - - - - - - - - - default frame limit on v3.1
+   
+   
+   NOTE: VERIFY-SYSTEM displays un-verified frames as follows:
+                          <Frame.Number>  <Expected.Value>  <Calculated.Value>
+                          The <Expected.Value> is found in ERRMSG CHECK-SUM.
+   
+   Notes on versions:
+   v2.2                   Frame  47 Mismatch can be considered harmless.
+                          Frame 155 Mismatch can be considered harmless.
+                          Frame 315 Mismatch can be considered harmless.
+                          Frame 419 (User-Exit bug - see Tech.Bull. IH-03)
+   
+   v3.0                   Frame 122 (bug in RQM)
+                          Frame 238 (bug in RND function)
+                          Frame 321 (bug in Jet)
+                          Frame 399 (bug in Accu-Cursor - see Tech.Bull. PW-04)
+
